@@ -1,10 +1,20 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Any
 import re
 
 app = FastAPI()
+
+# Enable CORS for integration with Oracle APEX or any frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class OCRRequest(BaseModel):
     pages: List[Dict[str, Any]]
@@ -49,14 +59,58 @@ def extract_total_amount(lines):
     return 0.0
 
 def detect_purpose(text):
-    if "PHARMACY" in text:
+    text_upper = text.upper()
+
+    # Medical
+    medical_keywords = [
+        "PHARMACY", "DOCTOR", "DR.", "CLINIC", "HOSPITAL", "SURGERY",
+        "NURSING HOME", "MEDICAL CENTER", "LAB", "MBBS", "MD", "DIAGNOSTIC"
+    ]
+
+    # Shopping
+    shopping_keywords = ["DMART", "BIG BAZAAR", "RELIANCE RETAIL", "SHOPPING", "MALL", "FASHION", "APPAREL"]
+
+    # Fuel
+    fuel_keywords = ["FUEL", "PETROL", "DIESEL", "HPCL", "IOC", "INDIAN OIL", "BPCL", "GAS STATION"]
+
+    # Food/Hotel
+    food_keywords = ["HOTEL", "RESTAURANT", "FOOD", "DINING", "CAFE", "MEAL", "ZOMATO", "SWIGGY"]
+
+    # Travel
+    travel_keywords = ["CAB", "TAXI", "OLA", "UBER", "TRAVEL", "BOOKING.COM", "MAKEMYTRIP", "GOIBIBO", "TRIP"]
+
+    # Office/Stationery
+    office_keywords = ["STATIONERY", "PRINTER", "TONER", "PAPER", "OFFICE DEPOT", "SUPPLIES", "NOTEBOOK", "PEN", "XEROX"]
+
+    # Groceries
+    grocery_keywords = ["GROCERY", "PROVISION", "VEGETABLE", "FRUITS", "FOOD BAZAAR", "KIRANA"]
+
+    # Electronics
+    electronics_keywords = ["LAPTOP", "MOBILE", "ELECTRONICS", "GADGET", "TV", "MONITOR", "CHARGER", "CABLE"]
+
+    # Commute
+    commute_keywords = ["BUS", "TRAIN", "TICKET", "RAILWAY", "TRAVEL CARD", "PASS"]
+
+    # Check each category
+    if any(k in text_upper for k in medical_keywords):
         return "Medical Reimbursement"
-    elif "DMART" in text:
-        return "DMart Shopping"
-    elif any(k in text for k in ["FUEL", "PETROL", "HPCL", "IOC"]):
+    elif any(k in text_upper for k in shopping_keywords):
+        return "Shopping Expense"
+    elif any(k in text_upper for k in fuel_keywords):
         return "Fuel Reimbursement"
-    elif any(k in text for k in ["HOTEL", "RESTAURANT", "FOOD"]):
+    elif any(k in text_upper for k in food_keywords):
         return "Food/Hotel Expense"
+    elif any(k in text_upper for k in travel_keywords):
+        return "Travel Expense"
+    elif any(k in text_upper for k in office_keywords):
+        return "Office/Stationery Purchase"
+    elif any(k in text_upper for k in grocery_keywords):
+        return "Grocery Reimbursement"
+    elif any(k in text_upper for k in electronics_keywords):
+        return "Electronics Purchase"
+    elif any(k in text_upper for k in commute_keywords):
+        return "Commute or Transport Expense"
+
     return "General Reimbursement"
 
 @app.post("/extract-expense-info")
@@ -68,6 +122,7 @@ async def extract_expense_info(payload: OCRRequest):
 
         total = extract_total_amount(lines)
 
+        # Detect currency
         if "INR" in full_text or "₹" in full_text or "RS" in full_text:
             currency = "INR"
         elif "USD" in full_text or "$" in full_text:
@@ -86,3 +141,4 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
