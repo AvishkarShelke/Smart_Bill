@@ -43,64 +43,53 @@ def group_words_into_lines(words):
         lines.append(" ".join(current_line))
     return lines
 
-# ✅ Extract total amount from text lines
+# ✅ FIXED total extraction logic — avoids "sub total"
 def extract_total_amount(lines):
-    total_keywords = ["grand total", "net amount", "total", "net payable", "amount to be paid"]
-    potential_amounts = []
+    prioritized_keywords = [
+        "amount to be paid",
+        "grand total",
+        "total amount",
+        "net payable",
+        "net amount",
+        "total"
+    ]
 
-    for line in lines:
-        line_lower = line.lower()
-        if any(kw in line_lower for kw in total_keywords):
-            amounts = re.findall(r"\d{2,6}\.\d{2}", line)
-            for amt in amounts:
-                val = float(amt)
-                if 50 <= val <= 99999:
-                    potential_amounts.append(val)
+    # Step 1: Look for strong keyword matches, ignore subtotal
+    for keyword in prioritized_keywords:
+        for line in lines:
+            line_lower = line.lower()
+            if keyword in line_lower and "sub" not in line_lower:
+                amounts = re.findall(r"\d{2,6}\.\d{2}", line)
+                for amt in amounts:
+                    val = float(amt)
+                    if 50 <= val <= 99999:
+                        return val
 
-    if potential_amounts:
-        return max(potential_amounts)
-
-    # Fallback: use max float in all lines
-    fallback_amounts = re.findall(r"\d{2,6}\.\d{2}", " ".join(lines))
-    if fallback_amounts:
-        return max([float(x) for x in fallback_amounts])
-    return 0.0
+    # Step 2: Fallback to max value in lines excluding "sub total"
+    fallback_amounts = [
+        float(x)
+        for line in lines if "sub total" not in line.lower()
+        for x in re.findall(r"\d{2,6}\.\d{2}", line)
+    ]
+    return max(fallback_amounts) if fallback_amounts else 0.0
 
 # ✅ Detect purpose from full text
 def detect_purpose(text):
     text_upper = text.upper()
 
-    # Medical
     medical_keywords = [
         "PHARMACY", "DOCTOR", "DR.", "CLINIC", "HOSPITAL", "SURGERY",
         "NURSING HOME", "MEDICAL CENTER", "LAB", "MBBS", "MD", "DIAGNOSTIC"
     ]
-
-    # Shopping
     shopping_keywords = ["DMART", "BIG BAZAAR", "RELIANCE RETAIL", "SHOPPING", "MALL", "FASHION", "APPAREL"]
-
-    # Fuel
     fuel_keywords = ["FUEL", "PETROL", "DIESEL", "HPCL", "IOC", "INDIAN OIL", "BPCL", "GAS STATION"]
-
-    # Food/Hotel
     food_keywords = ["HOTEL", "RESTAURANT", "FOOD", "DINING", "CAFE", "MEAL", "ZOMATO", "SWIGGY"]
-
-    # Travel
     travel_keywords = ["CAB", "TAXI", "OLA", "UBER", "TRAVEL", "BOOKING.COM", "MAKEMYTRIP", "GOIBIBO", "TRIP"]
-
-    # Office/Stationery
     office_keywords = ["STATIONERY", "PRINTER", "TONER", "PAPER", "OFFICE DEPOT", "SUPPLIES", "NOTEBOOK", "PEN", "XEROX"]
-
-    # Groceries
     grocery_keywords = ["GROCERY", "PROVISION", "VEGETABLE", "FRUITS", "FOOD BAZAAR", "KIRANA"]
-
-    # Electronics
     electronics_keywords = ["LAPTOP", "MOBILE", "ELECTRONICS", "GADGET", "TV", "MONITOR", "CHARGER", "CABLE"]
-
-    # Commute
     commute_keywords = ["BUS", "TRAIN", "TICKET", "RAILWAY", "TRAVEL CARD", "PASS"]
 
-    # Check each category
     if any(k in text_upper for k in medical_keywords):
         return "Medical Reimbursement"
     elif any(k in text_upper for k in shopping_keywords):
@@ -119,7 +108,6 @@ def detect_purpose(text):
         return "Electronics Purchase"
     elif any(k in text_upper for k in commute_keywords):
         return "Commute or Transport Expense"
-
     return "General Reimbursement"
 
 # ✅ Main API route
@@ -132,7 +120,6 @@ async def extract_expense_info(payload: OCRRequest):
 
         total = extract_total_amount(lines)
 
-        # Detect currency
         if "INR" in full_text or "₹" in full_text or "RS" in full_text:
             currency = "INR"
         elif "USD" in full_text or "$" in full_text:
@@ -151,5 +138,6 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
