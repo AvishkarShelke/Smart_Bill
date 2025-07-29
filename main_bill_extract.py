@@ -7,18 +7,25 @@ import re
 
 app = FastAPI()
 
-# Enable CORS for integration with Oracle APEX or any frontend
+# ✅ CORS Config: Only allow your Oracle APEX domain
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://gccffb251970d0d-acseatpdbus.adb.us-ashburn-1.oraclecloudapps.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ✅ Handle preflight request (important for browsers)
+@app.options("/extract-expense-info")
+async def preflight():
+    return JSONResponse(status_code=200)
+
+# ✅ Input schema
 class OCRRequest(BaseModel):
     pages: List[Dict[str, Any]]
 
+# ✅ Helper: Group OCR words into lines based on Y-axis
 def group_words_into_lines(words):
     lines = []
     current_line = []
@@ -36,6 +43,7 @@ def group_words_into_lines(words):
         lines.append(" ".join(current_line))
     return lines
 
+# ✅ Extract total amount from text lines
 def extract_total_amount(lines):
     total_keywords = ["grand total", "net amount", "total", "net payable", "amount to be paid"]
     potential_amounts = []
@@ -58,6 +66,7 @@ def extract_total_amount(lines):
         return max([float(x) for x in fallback_amounts])
     return 0.0
 
+# ✅ Detect purpose from full text
 def detect_purpose(text):
     text_upper = text.upper()
 
@@ -113,6 +122,7 @@ def detect_purpose(text):
 
     return "General Reimbursement"
 
+# ✅ Main API route
 @app.post("/extract-expense-info")
 async def extract_expense_info(payload: OCRRequest):
     try:
@@ -141,4 +151,5 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
