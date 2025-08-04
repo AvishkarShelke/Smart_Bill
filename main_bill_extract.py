@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Any
 import re
+from datetime import datetime
 
 app = FastAPI()
 
@@ -54,7 +55,6 @@ def extract_total_amount(lines):
         "total"
     ]
 
-    # Step 1: Look for strong keyword matches, ignore subtotal
     for keyword in prioritized_keywords:
         for line in lines:
             line_lower = line.lower()
@@ -65,13 +65,53 @@ def extract_total_amount(lines):
                     if 50 <= val <= 99999:
                         return val
 
-    # Step 2: Fallback to max value in lines excluding "sub total"
     fallback_amounts = [
         float(x)
         for line in lines if "sub total" not in line.lower()
         for x in re.findall(r"\d{2,6}\.\d{2}", line)
     ]
     return max(fallback_amounts) if fallback_amounts else 0.0
+
+# ✅ Smart: Extract payment date with context awareness
+def extract_date_from_text(lines):
+    # Patterns to match various date formats
+    date_patterns = [
+        r"\b(\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4})\b",  # 12/05/2023, 12-05-2023
+        r"\b(\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2})\b",    # 2023-05-12
+        r"\b(\d{1,2} [A-Za-z]{3,9} \d{2,4})\b",      # 12 May 2023
+        r"\b([A-Za-z]{3,9} \d{1,2}, \d{4})\b"        # May 12, 2023
+    ]
+
+    # Keywords indicating billing or payment date
+    payment_date_keywords = [
+        "invoice date", "bill date", "payment date", "txn date", "transaction date",
+        "paid on", "date of payment", "date:"
+    ]
+
+    # Step 1: Look for date in lines with payment-related keywords
+    for line in lines:
+        line_lower = line.lower()
+        if any(keyword in line_lower for keyword in payment_date_keywords):
+            for pattern in date_patterns:
+                match = re.search(pattern, line)
+                if match:
+                    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y"]:
+                        try:
+                            return datetime.strptime(match.group(1), fmt).strftime("%Y-%m-%d")
+                        except:
+                            continue
+
+    # Step 2: Fallback to any first valid date (if no keywords match)
+    for line in lines:
+        for pattern in date_patterns:
+            match = re.search(pattern, line)
+            if match:
+                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y"]:
+                    try:
+                        return datetime.strptime(match.group(1), fmt).strftime("%Y-%m-%d")
+                    except:
+                        continue
+    return "Not Found"
 
 # ✅ Detect purpose from full text
 def detect_purpose(text):
@@ -119,6 +159,7 @@ async def extract_expense_info(payload: OCRRequest):
         full_text = " ".join([w["text"].upper() for w in words])
 
         total = extract_total_amount(lines)
+        expense_date = extract_date_from_text(lines)
 
         if "INR" in full_text or "₹" in full_text or "RS" in full_text:
             currency = "INR"
@@ -133,11 +174,13 @@ async def extract_expense_info(payload: OCRRequest):
             "ReimbursementCurrencyCode": currency,
             "ExpenseReportTotal": f"{total:.2f}",
             "Purpose": detect_purpose(full_text),
+            "ExpenseReportDate": expense_date,
             "SubmitReport": "Y"
         }
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
