@@ -174,12 +174,13 @@ async def extract_expense_info(payload: OCRRequest):
             "ReimbursementCurrencyCode": currency,
             "ExpenseReportTotal": f"{total:.2f}",
             "Purpose": detect_purpose(full_text),
-            "ExpenseReportDate": expense_date,
+            "ExpenseDate": expense_date,
             "SubmitReport": "Y"
         }
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
