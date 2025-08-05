@@ -72,7 +72,7 @@ def extract_total_amount(lines):
     ]
     return max(fallback_amounts) if fallback_amounts else 0.0
 
-# ✅ UPDATED: Smart and fallback-aware date extractor
+# ✅ NEW: Smart and contextual date extraction logic
 def extract_date_from_text(lines):
     date_patterns = [
         r"\b(\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4})\b",
@@ -81,37 +81,63 @@ def extract_date_from_text(lines):
         r"\b([A-Za-z]{3,9} \d{1,2}, \d{4})\b"
     ]
 
-    payment_date_keywords = [
+    keywords = [
         "invoice date", "bill date", "payment date", "txn date", "transaction date",
         "paid on", "date of payment", "date:", "date"
     ]
 
-    def parse_date(date_str):
-        formats = ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y"]
-        for fmt in formats:
-            try:
-                dt = datetime.strptime(date_str, fmt)
-                # Normalize 2-digit years to 2000+
-                if dt.year < 2000:
-                    dt = dt.replace(year=dt.year + 100)
-                return dt.strftime("%Y-%m-%d")
-            except:
-                continue
-        return date_str
-
+    # STEP 1 — Inline match
     for line in lines:
-        line_lower = line.lower()
-        if any(keyword in line_lower for keyword in payment_date_keywords):
+        lower = line.lower()
+        if any(kw in lower for kw in keywords):
             for pattern in date_patterns:
                 match = re.search(pattern, line)
                 if match:
-                    return parse_date(match.group(1))
+                    date_str = match.group(1)
+                    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y"]:
+                        try:
+                            dt = datetime.strptime(date_str, fmt)
+                            if dt.year < 2000:
+                                dt = dt.replace(year=dt.year + 100)
+                            return dt.strftime("%Y-%m-%d")
+                        except:
+                            continue
+                    return date_str
 
+    # STEP 2 — Nearby keyword match (previous/next lines)
+    for i, line in enumerate(lines):
+        if any(kw in line.lower() for kw in keywords):
+            nearby_lines = [lines[i-1] if i > 0 else "", lines[i+1] if i+1 < len(lines) else ""]
+            for near in nearby_lines:
+                for pattern in date_patterns:
+                    match = re.search(pattern, near)
+                    if match:
+                        date_str = match.group(1)
+                        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y"]:
+                            try:
+                                dt = datetime.strptime(date_str, fmt)
+                                if dt.year < 2000:
+                                    dt = dt.replace(year=dt.year + 100)
+                                return dt.strftime("%Y-%m-%d")
+                            except:
+                                continue
+                        return date_str
+
+    # STEP 3 — General fallback
     for line in lines:
         for pattern in date_patterns:
             match = re.search(pattern, line)
             if match:
-                return parse_date(match.group(1))
+                date_str = match.group(1)
+                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y"]:
+                    try:
+                        dt = datetime.strptime(date_str, fmt)
+                        if dt.year < 2000:
+                            dt = dt.replace(year=dt.year + 100)
+                        return dt.strftime("%Y-%m-%d")
+                    except:
+                        continue
+                return date_str
 
     return "Not Found"
 
@@ -182,6 +208,7 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
