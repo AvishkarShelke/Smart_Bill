@@ -17,16 +17,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Handle preflight request (important for browsers)
 @app.options("/extract-expense-info")
 async def preflight():
     return JSONResponse(status_code=200)
 
-# ✅ Input schema
 class OCRRequest(BaseModel):
     pages: List[Dict[str, Any]]
 
-# ✅ Helper: Group OCR words into lines based on Y-axis
 def group_words_into_lines(words):
     lines = []
     current_line = []
@@ -44,15 +41,10 @@ def group_words_into_lines(words):
         lines.append(" ".join(current_line))
     return lines
 
-# ✅ FIXED total extraction logic — avoids "sub total"
 def extract_total_amount(lines):
     prioritized_keywords = [
-        "amount to be paid",
-        "grand total",
-        "total amount",
-        "net payable",
-        "net amount",
-        "total"
+        "amount to be paid", "grand total", "total amount",
+        "net payable", "net amount", "total"
     ]
 
     for keyword in prioritized_keywords:
@@ -72,48 +64,47 @@ def extract_total_amount(lines):
     ]
     return max(fallback_amounts) if fallback_amounts else 0.0
 
-# ✅ Smart: Extract payment date with context awareness
+# ✅ UPDATED DATE FUNCTION
 def extract_date_from_text(lines):
-    # Patterns to match various date formats
     date_patterns = [
-        r"\b(\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4})\b",  # 12/05/2023, 12-05-2023
-        r"\b(\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2})\b",    # 2023-05-12
-        r"\b(\d{1,2} [A-Za-z]{3,9} \d{2,4})\b",      # 12 May 2023
-        r"\b([A-Za-z]{3,9} \d{1,2}, \d{4})\b"        # May 12, 2023
+        r"\b(\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4})\b",
+        r"\b(\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2})\b",
+        r"\b(\d{1,2} [A-Za-z]{3,9} \d{2,4})\b",
+        r"\b([A-Za-z]{3,9} \d{1,2}, \d{4})\b"
     ]
-
-    # Keywords indicating billing or payment date
     payment_date_keywords = [
         "invoice date", "bill date", "payment date", "txn date", "transaction date",
-        "paid on", "date of payment", "date:"
+        "paid on", "date of payment", "date:", "date"
     ]
 
-    # Step 1: Look for date in lines with payment-related keywords
     for line in lines:
         line_lower = line.lower()
         if any(keyword in line_lower for keyword in payment_date_keywords):
             for pattern in date_patterns:
                 match = re.search(pattern, line)
                 if match:
+                    date_str = match.group(1)
                     for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y"]:
                         try:
-                            return datetime.strptime(match.group(1), fmt).strftime("%Y-%m-%d")
+                            return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
                         except:
                             continue
+                    return date_str  # fallback: return as-is
 
-    # Step 2: Fallback to any first valid date (if no keywords match)
     for line in lines:
         for pattern in date_patterns:
             match = re.search(pattern, line)
             if match:
+                date_str = match.group(1)
                 for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y"]:
                     try:
-                        return datetime.strptime(match.group(1), fmt).strftime("%Y-%m-%d")
+                        return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
                     except:
                         continue
+                return date_str  # fallback: return as-is
+
     return "Not Found"
 
-# ✅ Detect purpose from full text
 def detect_purpose(text):
     text_upper = text.upper()
 
@@ -150,7 +141,6 @@ def detect_purpose(text):
         return "Commute or Transport Expense"
     return "General Reimbursement"
 
-# ✅ Main API route
 @app.post("/extract-expense-info")
 async def extract_expense_info(payload: OCRRequest):
     try:
@@ -180,6 +170,7 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
