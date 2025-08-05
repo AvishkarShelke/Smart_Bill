@@ -27,12 +27,14 @@ class OCRRequest(BaseModel):
     pages: List[Dict[str, Any]]
 
 # ✅ Helper: Group OCR words into lines based on Y-axis
+
 def group_words_into_lines(words):
+    sorted_words = sorted(words, key=lambda w: (round(w["boundingPolygon"]["normalizedVertices"][0]["y"], 2), w["boundingPolygon"]["normalizedVertices"][0]["x"]))
     lines = []
     current_line = []
     prev_y = None
 
-    for word in sorted(words, key=lambda w: w["boundingPolygon"]["normalizedVertices"][0]["y"]):
+    for word in sorted_words:
         y = round(word["boundingPolygon"]["normalizedVertices"][0]["y"], 2)
         if prev_y is None or abs(y - prev_y) < 0.01:
             current_line.append(word["text"])
@@ -72,24 +74,18 @@ def extract_total_amount(lines):
     ]
     return max(fallback_amounts) if fallback_amounts else 0.0
 
-# ✅ IMPROVED: Smarter date extraction from entire text
+# ✅ NEW: Robust Date Extraction
 
 def extract_date_from_text(lines):
     date_patterns = [
-        r"\b(\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4})\b",
-        r"\b(\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2})\b",
+        r"\b(\d{1,2}[-/\.\s]\d{1,2}[-/\.\s]\d{2,4})\b",
+        r"\b(\d{4}[-/\.\s]\d{1,2}[-/\.\s]\d{1,2})\b",
         r"\b(\d{1,2} [A-Za-z]{3,9} \d{2,4})\b",
         r"\b([A-Za-z]{3,9} \d{1,2}, \d{4})\b"
     ]
 
-    keywords = [
-        "invoice date", "bill date", "payment date", "txn date", "transaction date",
-        "paid on", "date of payment", "date:", "date"
-    ]
-
     def parse_date_safe(date_str):
-        formats = ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d",
-                   "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y"]
+        formats = ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y"]
         for fmt in formats:
             try:
                 dt = datetime.strptime(date_str, fmt)
@@ -101,52 +97,30 @@ def extract_date_from_text(lines):
                 continue
         return None
 
-    # STEP 1: Inline keyword + date
-    for line in lines:
-        lower = line.lower()
-        if any(kw in lower for kw in keywords):
-            for pattern in date_patterns:
-                match = re.search(pattern, line)
-                if match:
-                    parsed = parse_date_safe(match.group(1))
-                    if parsed:
-                        return parsed
-
-    # STEP 2: Nearby keyword (±1 line)
-    for i, line in enumerate(lines):
-        if any(kw in line.lower() for kw in keywords):
-            nearby = [lines[i - 1] if i > 0 else "", lines[i + 1] if i + 1 < len(lines) else ""]
-            for near in nearby:
-                for pattern in date_patterns:
-                    match = re.search(pattern, near)
-                    if match:
-                        parsed = parse_date_safe(match.group(1))
-                        if parsed:
-                            return parsed
-
-    # STEP 3: Global fallback — best-looking valid date
     valid_dates = []
     for line in lines:
         for pattern in date_patterns:
-            match = re.search(pattern, line)
-            if match:
-                parsed = parse_date_safe(match.group(1))
+            matches = re.findall(pattern, line)
+            for match in matches:
+                parsed = parse_date_safe(match)
                 if parsed:
-                    valid_dates.append(parsed)
+                    valid_dates.append((parsed, line.lower()))
+
+    # Smart selection: prioritize date near keywords
+    keywords = ["invoice date", "bill date", "payment date", "txn date", "transaction date", "paid on", "date of payment", "date"]
+    for date, context in valid_dates:
+        if any(k in context for k in keywords):
+            return date
 
     if valid_dates:
-        return valid_dates[0]  # could apply sorting or most recent logic
-
+        return valid_dates[0][0]  # default to first found valid
     return "Not Found"
 
 # ✅ Detect purpose from full text
 def detect_purpose(text):
     text_upper = text.upper()
 
-    medical_keywords = [
-        "PHARMACY", "DOCTOR", "DR.", "CLINIC", "HOSPITAL", "SURGERY",
-        "NURSING HOME", "MEDICAL CENTER", "LAB", "MBBS", "MD", "DIAGNOSTIC"
-    ]
+    medical_keywords = ["PHARMACY", "DOCTOR", "DR.", "CLINIC", "HOSPITAL", "SURGERY", "NURSING HOME", "MEDICAL CENTER", "LAB", "MBBS", "MD", "DIAGNOSTIC"]
     shopping_keywords = ["DMART", "BIG BAZAAR", "RELIANCE RETAIL", "SHOPPING", "MALL", "FASHION", "APPAREL"]
     fuel_keywords = ["FUEL", "PETROL", "DIESEL", "HPCL", "IOC", "INDIAN OIL", "BPCL", "GAS STATION"]
     food_keywords = ["HOTEL", "RESTAURANT", "FOOD", "DINING", "CAFE", "MEAL", "ZOMATO", "SWIGGY"]
@@ -206,6 +180,7 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
