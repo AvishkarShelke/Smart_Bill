@@ -8,7 +8,7 @@ from datetime import datetime
 
 app = FastAPI()
 
-# ✅ CORS Config: Only allow your Oracle APEX domain
+# CORS Config
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://gccffb251970d0d-acseatpdbus.adb.us-ashburn-1.oraclecloudapps.com"],
@@ -64,7 +64,6 @@ def extract_total_amount(lines):
     ]
     return max(fallback_amounts) if fallback_amounts else 0.0
 
-# ✅ UPDATED DATE FUNCTION
 def extract_date_from_text(lines):
     date_patterns = [
         r"\b(\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4})\b",
@@ -84,34 +83,36 @@ def extract_date_from_text(lines):
                 match = re.search(pattern, line)
                 if match:
                     date_str = match.group(1)
-                    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y"]:
+                    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y", "%d/%m/%y"]:
                         try:
-                            return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
+                            dt = datetime.strptime(date_str, fmt)
+                            if dt.year < 2000:
+                                dt = dt.replace(year=dt.year + 100)
+                            return dt.strftime("%Y-%m-%d")
                         except:
                             continue
-                    return date_str  # fallback: return as-is
+                    return date_str
 
     for line in lines:
         for pattern in date_patterns:
             match = re.search(pattern, line)
             if match:
                 date_str = match.group(1)
-                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y"]:
+                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y", "%d/%m/%y"]:
                     try:
-                        return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
+                        dt = datetime.strptime(date_str, fmt)
+                        if dt.year < 2000:
+                            dt = dt.replace(year=dt.year + 100)
+                        return dt.strftime("%Y-%m-%d")
                     except:
                         continue
-                return date_str  # fallback: return as-is
+                return date_str
 
     return "Not Found"
 
 def detect_purpose(text):
     text_upper = text.upper()
-
-    medical_keywords = [
-        "PHARMACY", "DOCTOR", "DR.", "CLINIC", "HOSPITAL", "SURGERY",
-        "NURSING HOME", "MEDICAL CENTER", "LAB", "MBBS", "MD", "DIAGNOSTIC"
-    ]
+    medical_keywords = ["PHARMACY", "DOCTOR", "DR.", "CLINIC", "HOSPITAL", "SURGERY", "NURSING HOME", "MEDICAL CENTER", "LAB", "MBBS", "MD", "DIAGNOSTIC"]
     shopping_keywords = ["DMART", "BIG BAZAAR", "RELIANCE RETAIL", "SHOPPING", "MALL", "FASHION", "APPAREL"]
     fuel_keywords = ["FUEL", "PETROL", "DIESEL", "HPCL", "IOC", "INDIAN OIL", "BPCL", "GAS STATION"]
     food_keywords = ["HOTEL", "RESTAURANT", "FOOD", "DINING", "CAFE", "MEAL", "ZOMATO", "SWIGGY"]
@@ -170,6 +171,7 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
