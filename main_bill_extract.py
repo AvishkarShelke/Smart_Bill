@@ -72,7 +72,8 @@ def extract_total_amount(lines):
     ]
     return max(fallback_amounts) if fallback_amounts else 0.0
 
-# ✅ NEW: Smart and contextual date extraction logic
+# ✅ IMPROVED: Smarter date extraction from entire text
+
 def extract_date_from_text(lines):
     date_patterns = [
         r"\b(\d{1,2}[-/\.]\d{1,2}[-/\.]\d{2,4})\b",
@@ -86,58 +87,55 @@ def extract_date_from_text(lines):
         "paid on", "date of payment", "date:", "date"
     ]
 
-    # STEP 1 — Inline match
+    def parse_date_safe(date_str):
+        formats = ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d",
+                   "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y"]
+        for fmt in formats:
+            try:
+                dt = datetime.strptime(date_str, fmt)
+                if dt.year < 2000:
+                    dt = dt.replace(year=dt.year + 100)
+                if dt.year >= 2010 and dt.year <= datetime.now().year + 1:
+                    return dt.strftime("%Y-%m-%d")
+            except:
+                continue
+        return None
+
+    # STEP 1: Inline keyword + date
     for line in lines:
         lower = line.lower()
         if any(kw in lower for kw in keywords):
             for pattern in date_patterns:
                 match = re.search(pattern, line)
                 if match:
-                    date_str = match.group(1)
-                    for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y"]:
-                        try:
-                            dt = datetime.strptime(date_str, fmt)
-                            if dt.year < 2000:
-                                dt = dt.replace(year=dt.year + 100)
-                            return dt.strftime("%Y-%m-%d")
-                        except:
-                            continue
-                    return date_str
+                    parsed = parse_date_safe(match.group(1))
+                    if parsed:
+                        return parsed
 
-    # STEP 2 — Nearby keyword match (previous/next lines)
+    # STEP 2: Nearby keyword (±1 line)
     for i, line in enumerate(lines):
         if any(kw in line.lower() for kw in keywords):
-            nearby_lines = [lines[i-1] if i > 0 else "", lines[i+1] if i+1 < len(lines) else ""]
-            for near in nearby_lines:
+            nearby = [lines[i - 1] if i > 0 else "", lines[i + 1] if i + 1 < len(lines) else ""]
+            for near in nearby:
                 for pattern in date_patterns:
                     match = re.search(pattern, near)
                     if match:
-                        date_str = match.group(1)
-                        for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y"]:
-                            try:
-                                dt = datetime.strptime(date_str, fmt)
-                                if dt.year < 2000:
-                                    dt = dt.replace(year=dt.year + 100)
-                                return dt.strftime("%Y-%m-%d")
-                            except:
-                                continue
-                        return date_str
+                        parsed = parse_date_safe(match.group(1))
+                        if parsed:
+                            return parsed
 
-    # STEP 3 — General fallback
+    # STEP 3: Global fallback — best-looking valid date
+    valid_dates = []
     for line in lines:
         for pattern in date_patterns:
             match = re.search(pattern, line)
             if match:
-                date_str = match.group(1)
-                for fmt in ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y"]:
-                    try:
-                        dt = datetime.strptime(date_str, fmt)
-                        if dt.year < 2000:
-                            dt = dt.replace(year=dt.year + 100)
-                        return dt.strftime("%Y-%m-%d")
-                    except:
-                        continue
-                return date_str
+                parsed = parse_date_safe(match.group(1))
+                if parsed:
+                    valid_dates.append(parsed)
+
+    if valid_dates:
+        return valid_dates[0]  # could apply sorting or most recent logic
 
     return "Not Found"
 
@@ -208,6 +206,7 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
