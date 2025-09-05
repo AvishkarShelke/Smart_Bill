@@ -72,13 +72,19 @@ def extract_total_amount(lines):
 
 def extract_date_from_text(lines):
     date_patterns = [
+        r"\b(\d{1,2}[-/\.\s][A-Za-z]{3}[-/\.\s]\d{2,4})\b",  # NEW: 12-DEC-2020
         r"\b(\d{1,2}[-/\.\s]\d{1,2}[-/\.\s]\d{2,4})\b",
         r"\b(\d{4}[-/\.\s]\d{1,2}[-/\.\s]\d{1,2})\b",
         r"\b(\d{1,2} [A-Za-z]{3,9} \d{2,4})\b",
         r"\b([A-Za-z]{3,9} \d{1,2}, \d{4})\b"
     ]
+
     def parse_date_safe(date_str):
-        formats = ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d", "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y"]
+        formats = [
+            "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d",
+            "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y",
+            "%d-%b-%Y", "%d-%b-%y"   # NEW: 12-DEC-2020 or 12-DEC-20
+        ]
         for fmt in formats:
             try:
                 dt = datetime.strptime(date_str, fmt)
@@ -89,6 +95,7 @@ def extract_date_from_text(lines):
             except:
                 continue
         return None
+
     valid_dates = []
     for line in lines:
         for pattern in date_patterns:
@@ -97,10 +104,15 @@ def extract_date_from_text(lines):
                 parsed = parse_date_safe(match)
                 if parsed:
                     valid_dates.append((parsed, line.lower()))
-    keywords = ["invoice date", "bill date", "payment date", "txn date", "transaction date", "paid on", "date of payment", "date"]
+
+    keywords = [
+        "invoice date", "bill date", "payment date", "txn date",
+        "transaction date", "paid on", "date of payment", "date"
+    ]
     for date, context in valid_dates:
         if any(k in context for k in keywords):
             return date
+
     return valid_dates[0][0] if valid_dates else "Not Found"
 
 def detect_purpose(text):
@@ -166,6 +178,7 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
