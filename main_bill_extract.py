@@ -119,7 +119,17 @@ def extract_date_from_text(lines):
 def detect_purpose(text, expense_date=None):
     text_upper = text.upper()
 
-    # --- ⏰ Time-based Meal Logic ---
+    # --- 1️⃣ Store/vendor-based categories first ---
+    store_keywords = {
+        "Supplies": ["DMART", "BIG BAZAAR", "RELIANCE", "METRO", "SHOPPER STOP", "LIFESTYLE", "RELIANCE TRENDS"],
+        "Shopping": ["AMAZON", "FLIPKART", "MYNTRA", "AJIO"]
+    }
+
+    for category, keywords in store_keywords.items():
+        if any(k in text_upper for k in keywords):
+            return category
+
+    # --- 2️⃣ Meal keywords next (only if not classified above) ---
     meal_keywords = {
         "BREAKFAST": ["MORNING MEAL", "TEA", "COFFEE", "SNACKS", "CAFE", "IDLI", "DOSA", "POHA", "BREAD", "MILK", "JUICE", "PANCAKE", "OMELETTE", "BREAKFAST COMBO"],
         "LUNCH": ["THALI", "MEAL", "MIDDAY", "CAFETERIA", "BUFFET", "VEG", "NON-VEG", "LUNCH BOX", "RESTAURANT BILL", "SUBWAY", "KFC", "PIZZA HUT"],
@@ -146,11 +156,10 @@ def detect_purpose(text, expense_date=None):
         if any(k in text_upper for k in keywords):
             return meal.capitalize()
 
-    # If no keyword match but time detected
     if meal_by_time:
         return meal_by_time.capitalize()
 
-    # --- Other Categories ---
+    # --- 3️⃣ Other categories (same as before) ---
     if any(k in text_upper for k in ["CAB", "TAXI", "AUTO", "RIDE", "OLA", "UBER", "RAPIDO", "MERU", "CNG RICKSHAW"]):
         return "Taxi"
     elif any(k in text_upper for k in ["PARKING", "TOLL", "GARAGE", "CAR PARK", "VEHICLE PARKING", "MALL PARKING", "HIGHWAY PARKING"]):
@@ -161,7 +170,7 @@ def detect_purpose(text, expense_date=None):
         return "Air"
     elif any(k in text_upper for k in ["CAR RENTAL", "ZOOMCAR", "REVV", "HERTZ", "AVIS", "ENTERPRISE RENTAL", "SELF DRIVE", "VEHICLE HIRE"]):
         return "Car Rental"
-    elif any(k in text_upper for k in ["MOVIE", "CINEMA", "THEATRE", "PVR", "INOX", "BOOKMYSHOW", "NETFLIX", "PRIME", "HOTSTAR", "SPOTIFY", "CONCERT", "EVENT", "SHOW", "GAMING", "SHOPPING", "MALL", "FASHION", "CLOTHES", "GARMENTS", "FOOTWEAR", "DMART", "BIG BAZAAR", "LIFESTYLE", "SHOPPER STOP", "RELIANCE TRENDS"]):
+    elif any(k in text_upper for k in ["MOVIE", "CINEMA", "THEATRE", "PVR", "INOX", "BOOKMYSHOW", "NETFLIX", "PRIME", "HOTSTAR", "SPOTIFY", "CONCERT", "EVENT", "SHOW", "GAMING", "SHOPPING", "MALL", "FASHION", "CLOTHES", "GARMENTS", "FOOTWEAR"]):
         return "Entertainment"
     elif any(k in text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION", "HP", "INDIANOIL", "BPCL", "SHELL", "REFUEL"]):
         return "Fuel"
@@ -170,10 +179,11 @@ def detect_purpose(text, expense_date=None):
     elif any(k in text_upper for k in ["HOSPITAL", "PHARMACY", "DOCTOR", "CLINIC", "SURGERY", "MEDICINE", "TABLET", "INJECTION", "LAB", "DIAGNOSTIC", "PATHOLOGY", "XRAY", "SCAN", "MRI", "CHEMIST"]):
         return "Miscellaneous"
 
-    # --- Fallbacks ---
+    # --- Fallback ---
     if "RESTAURANT" in text_upper or "FOOD" in text_upper:
-        return "Lunch"  # default meal fallback
+        return "Lunch"
     return "Miscellaneous"
+
 # --------------------------------------------------
 
 @app.post("/extract-expense-info")
@@ -217,6 +227,7 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
