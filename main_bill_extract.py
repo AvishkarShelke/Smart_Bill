@@ -115,27 +115,66 @@ def extract_date_from_text(lines):
 
     return valid_dates[0][0] if valid_dates else "Not Found"
 
-def detect_purpose(text):
+# ---------------- UPDATED FUNCTION ----------------
+def detect_purpose(text, expense_date=None):
     text_upper = text.upper()
-    if any(k in text_upper for k in ["PHARMACY", "DOCTOR", "CLINIC", "HOSPITAL", "SURGERY", "LAB"]):
-        return "Medical Reimbursement"
-    elif any(k in text_upper for k in ["DMART", "SHOPPING", "MALL", "FASHION"]):
-        return "Shopping Expense"
-    elif any(k in text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION"]):
-        return "Fuel Reimbursement"
-    elif any(k in text_upper for k in ["HOTEL", "RESTAURANT", "FOOD", "ZOMATO", "SWIGGY"]):
-        return "Food/Hotel Expense"
-    elif any(k in text_upper for k in ["CAB", "TAXI", "TRAVEL", "OLA", "UBER"]):
-        return "Travel Expense"
-    elif any(k in text_upper for k in ["STATIONERY", "PRINTER", "TONER", "SUPPLIES"]):
-        return "Office/Stationery Purchase"
-    elif any(k in text_upper for k in ["GROCERY", "VEGETABLE", "KIRANA"]):
-        return "Grocery Reimbursement"
-    elif any(k in text_upper for k in ["LAPTOP", "MOBILE", "GADGET", "ELECTRONICS"]):
-        return "Electronics Purchase"
-    elif any(k in text_upper for k in ["BUS", "TRAIN", "TICKET", "RAILWAY"]):
-        return "Commute or Transport Expense"
-    return "General Reimbursement"
+
+    # --- ⏰ Time-based Meal Logic ---
+    meal_keywords = {
+        "BREAKFAST": ["MORNING MEAL", "TEA", "COFFEE", "SNACKS", "CAFE", "IDLI", "DOSA", "POHA", "BREAD", "MILK", "JUICE", "PANCAKE", "OMELETTE", "BREAKFAST COMBO"],
+        "LUNCH": ["THALI", "MEAL", "MIDDAY", "CAFETERIA", "BUFFET", "VEG", "NON-VEG", "LUNCH BOX", "RESTAURANT BILL", "SUBWAY", "KFC", "PIZZA HUT"],
+        "DINNER": ["SUPPER", "NIGHT MEAL", "DINNER BUFFET", "RESTAURANT", "EVENING MEAL", "DINNER COMBO", "FINE DINE", "FOOD COURT", "DOMINOS", "ZOMATO", "SWIGGY"]
+    }
+
+    # Extract hour if available in expense_date
+    meal_by_time = None
+    if expense_date and expense_date != "Not Found":
+        try:
+            dt = datetime.strptime(expense_date, "%Y-%m-%d")
+            hour = dt.hour
+            if hour < 12:
+                meal_by_time = "BREAKFAST"
+            elif 12 <= hour <= 15:
+                meal_by_time = "LUNCH"
+            elif hour >= 18:
+                meal_by_time = "DINNER"
+        except:
+            pass
+
+    # Match meal keywords
+    for meal, keywords in meal_keywords.items():
+        if any(k in text_upper for k in keywords):
+            return meal.capitalize()
+
+    # If no keyword match but time detected
+    if meal_by_time:
+        return meal_by_time.capitalize()
+
+    # --- Other Categories ---
+    if any(k in text_upper for k in ["CAB", "TAXI", "AUTO", "RIDE", "OLA", "UBER", "RAPIDO", "MERU", "CNG RICKSHAW"]):
+        return "Taxi"
+    elif any(k in text_upper for k in ["PARKING", "TOLL", "GARAGE", "CAR PARK", "VEHICLE PARKING", "MALL PARKING", "HIGHWAY PARKING"]):
+        return "Parking"
+    elif any(k in text_upper for k in ["HOTEL", "RESORT", "LODGE", "INN", "MOTEL", "SUITE", "ROOM CHARGE", "STAY", "ACCOMMODATION", "GUEST HOUSE", "BOOKING.COM", "EXPEDIA", "MAKEMYTRIP"]):
+        return "Hotel"
+    elif any(k in text_upper for k in ["AIRLINES", "FLIGHT", "AIR TICKET", "BOARDING PASS", "INDIGO", "SPICEJET", "VISTARA", "GOFIRST", "AKASA", "EMIRATES", "QATAR AIRWAYS", "JET", "AIRPORT"]):
+        return "Air"
+    elif any(k in text_upper for k in ["CAR RENTAL", "ZOOMCAR", "REVV", "HERTZ", "AVIS", "ENTERPRISE RENTAL", "SELF DRIVE", "VEHICLE HIRE"]):
+        return "Car Rental"
+    elif any(k in text_upper for k in ["MOVIE", "CINEMA", "THEATRE", "PVR", "INOX", "BOOKMYSHOW", "NETFLIX", "PRIME", "HOTSTAR", "SPOTIFY", "CONCERT", "EVENT", "SHOW", "GAMING", "SHOPPING", "MALL", "FASHION", "CLOTHES", "GARMENTS", "FOOTWEAR", "DMART", "BIG BAZAAR", "LIFESTYLE", "SHOPPER STOP", "RELIANCE TRENDS"]):
+        return "Entertainment"
+    elif any(k in text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION", "HP", "INDIANOIL", "BPCL", "SHELL", "REFUEL"]):
+        return "Fuel"
+    elif any(k in text_upper for k in ["STATIONERY", "OFFICE SUPPLY", "PENS", "PRINTER", "CARTRIDGE", "INK", "TONER", "PAPER", "DIARY", "REGISTER", "FILE", "MARKER", "WHITEBOARD", "LAPTOP", "DESKTOP", "MONITOR", "KEYBOARD", "MOUSE", "SCANNER", "HEADPHONES", "EARPHONES", "SPEAKER", "CHARGER", "BATTERY", "ROUTER", "USB", "SSD", "HDD", "MOBILE", "TABLET", "CABLES", "PROJECTOR", "CAMERA", "ELECTRONIC BILL", "ELECTRONIC INVOICE"]):
+        return "Supplies"
+    elif any(k in text_upper for k in ["HOSPITAL", "PHARMACY", "DOCTOR", "CLINIC", "SURGERY", "MEDICINE", "TABLET", "INJECTION", "LAB", "DIAGNOSTIC", "PATHOLOGY", "XRAY", "SCAN", "MRI", "CHEMIST"]):
+        return "Miscellaneous"
+
+    # --- Fallbacks ---
+    if "RESTAURANT" in text_upper or "FOOD" in text_upper:
+        return "Lunch"  # default meal fallback
+    return "Miscellaneous"
+# --------------------------------------------------
 
 @app.post("/extract-expense-info")
 async def extract_expense_info(payload: OCRRequest):
@@ -171,13 +210,14 @@ async def extract_expense_info(payload: OCRRequest):
         return {
             "ReimbursementCurrencyCode": currency,
             "ExpenseReportTotal": f"{total:.2f}",
-            "Purpose": detect_purpose(full_text),
+            "Purpose": detect_purpose(full_text, expense_date),  # ✅ Updated call
             "ExpenseDate": expense_date,
             "SubmitReport": "Y"
         }
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
