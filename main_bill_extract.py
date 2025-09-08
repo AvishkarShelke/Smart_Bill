@@ -140,24 +140,36 @@ def detect_purpose(text, expense_date=None):
     meal_by_time = None
     if expense_date and expense_date != "Not Found":
         try:
-            dt = datetime.strptime(expense_date, "%Y-%m-%d")
+            # Try full datetime first (yyyy-mm-dd HH:MM:SS)
+            try:
+                dt = datetime.strptime(expense_date, "%Y-%m-%d %H:%M:%S")
+            except:
+                # fallback: only date given
+                dt = datetime.strptime(expense_date, "%Y-%m-%d")
+
             hour = dt.hour
-            if hour < 12:
-                meal_by_time = "BREAKFAST"
-            elif 12 <= hour <= 15:
-                meal_by_time = "LUNCH"
-            elif hour >= 18:
-                meal_by_time = "DINNER"
+            if hour < 11:
+                meal_by_time = "Breakfast"
+            elif 11 <= hour <= 16:
+                meal_by_time = "Lunch"
+            else:
+                meal_by_time = "Dinner"
         except:
             pass
 
-    # Match meal keywords
+    # Match meal keywords first
     for meal, keywords in meal_keywords.items():
         if any(k in text_upper for k in keywords):
             return meal.capitalize()
 
+    # If it's a restaurant/food bill, fallback to time-of-day classification
+    if "RESTAURANT" in text_upper or "FOOD" in text_upper or "MEAL" in text_upper:
+        if meal_by_time:
+            return meal_by_time
+        return "Lunch"  # safer default
+
     if meal_by_time:
-        return meal_by_time.capitalize()
+        return meal_by_time
 
     # --- 3️⃣ Other categories (same as before) ---
     if any(k in text_upper for k in ["CAB", "TAXI", "AUTO", "RIDE", "OLA", "UBER", "RAPIDO", "MERU", "CNG RICKSHAW"]):
@@ -180,9 +192,8 @@ def detect_purpose(text, expense_date=None):
         return "Miscellaneous"
 
     # --- Fallback ---
-    if "RESTAURANT" in text_upper or "FOOD" in text_upper:
-        return "Lunch"
     return "Miscellaneous"
+
 
 # --------------------------------------------------
 
@@ -227,18 +238,3 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
