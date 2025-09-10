@@ -100,6 +100,8 @@ def extract_total_amount(lines: List[str]) -> float:
         "total payable",
         "total amount",
         "balance due",
+        "amount payable from customer",
+        "upi payment",
         "total",
     ]
 
@@ -333,4 +335,5 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
