@@ -23,6 +23,7 @@ async def preflight():
 class OCRRequest(BaseModel):
     pages: List[Dict[str, Any]]
 
+
 def group_words_into_lines(words):
     lines = []
     current_line = []
@@ -51,28 +52,117 @@ def group_words_into_lines(words):
         lines.append(" ".join(current_line))
     return lines
 
-def extract_total_amount(lines):
+
+def _parse_amount_str(s: str):
+    """Cleans an OCR-captured amount string and returns float or None.
+    Handles commas, currency symbols, and accidental spaces.
+    """
+    if not s:
+        return None
+    # Remove currency symbols and stray letters
+    s_clean = re.sub(r"[₹$€£]|INR|USD|EUR|GBP", "", s, flags=re.IGNORECASE)
+    # Remove spaces between digits (like 1 234)
+    s_clean = re.sub(r"(?<=\d)\s+(?=\d)", "", s_clean)
+    # Remove any characters except digits, comma and dot
+    s_clean = re.sub(r"[^0-9,\.]", "", s_clean)
+    # Remove thousands separators (commas)
+    s_clean = s_clean.replace(",", "")
+    if s_clean.count(".") > 1:
+        # malformed number like 1.234.56 -> keep last two decimals
+        parts = s_clean.split(".")
+        s_clean = "".join(parts[:-1]) + "." + parts[-1]
+    try:
+        val = float(s_clean)
+        # sensible bounds
+        if val <= 0 or val > 10_000_000:
+            return None
+        return val
+    except:
+        return None
+
+
+def extract_total_amount(lines: List[str]) -> float:
+    """Improved total extraction logic.
+
+    Strategy:
+    1. Look for high-priority labels (in order): 'grand total', 'amount payable',
+       'amount to be paid', 'net payable', 'total payable', 'total amount', 'balance due', 'total'.
+       For each label, try to extract amount from same line, then neighbor lines.
+    2. If none found, collect all candidate amounts while excluding lines that contain
+       'subtotal', 'tax', 'discount', 'vat', 'cgst', 'sgst', 'change', etc. Return the largest candidate.
+    3. If still none, return 0.0
+    """
     prioritized_keywords = [
-        "amount to be paid", "grand total", "total amount", "net payable", "net amount", "total"
+        "grand total",
+        "amount payable",
+        "amount to be paid",
+        "net payable",
+        "total payable",
+        "total amount",
+        "balance due",
+        "total",
     ]
-    for keyword in prioritized_keywords:
-        for line in lines:
-            if keyword in line.lower() and "sub" not in line.lower():
-                amounts = re.findall(r"\d{2,6}\.\d{2}", line)
-                for amt in amounts:
-                    val = float(amt)
-                    if 50 <= val <= 99999:
-                        return val
-    fallback_amounts = [
-        float(x)
-        for line in lines if "sub total" not in line.lower()
-        for x in re.findall(r"\d{2,6}\.\d{2}", line)
-    ]
-    return max(fallback_amounts) if fallback_amounts else 0.0
+
+    # normalize lines for easier lookups
+    normalized = [ln for ln in lines]
+    n_lines = len(normalized)
+
+    amount_pattern = re.compile(r"[\d,]+(?:\.\d{1,2})?")
+
+    def amounts_in_line(line: str):
+        found = amount_pattern.findall(line.replace(" ", ""))
+        parsed = [_parse_amount_str(f) for f in found]
+        return [p for p in parsed if p is not None]
+
+    # 1) Search prioritized keywords in order
+    for kw in prioritized_keywords:
+        for idx, line in enumerate(normalized):
+            low = line.lower()
+            if kw in low and "sub" not in low:
+                # try same line
+                cands = amounts_in_line(line)
+                if cands:
+                    return max(cands)
+                # try next line
+                if idx + 1 < n_lines:
+                    cands = amounts_in_line(normalized[idx + 1])
+                    if cands:
+                        return max(cands)
+                # try previous line
+                if idx - 1 >= 0:
+                    cands = amounts_in_line(normalized[idx - 1])
+                    if cands:
+                        return max(cands)
+                # no numeric candidate found next to keyword - continue searching other occurrences
+
+    # 2) Fallback: gather all candidate amounts from all lines except excluded-label lines
+    exclude_tokens = ["sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes", "discount", "change"]
+    all_candidates = []
+    for line in normalized:
+        low = line.lower()
+        if any(tok in low for tok in exclude_tokens):
+            continue
+        cands = amounts_in_line(line)
+        if cands:
+            all_candidates.extend(cands)
+
+    if all_candidates:
+        # usually grand total is the maximum numeric value in the receipt
+        return max(all_candidates)
+
+    # 3) as last resort try to capture any amount that looks like a monetary figure
+    any_amounts = []
+    for line in normalized:
+        any_amounts.extend(amounts_in_line(line))
+    if any_amounts:
+        return max(any_amounts)
+
+    return 0.0
+
 
 def extract_date_from_text(lines):
     date_patterns = [
-        r"\b(\d{1,2}[-/\.\s][A-Za-z]{3}[-/\.\s]\d{2,4})\b",  # NEW: 12-DEC-2020
+        r"\b(\d{1,2}[-/\.\s][A-Za-z]{3}[-/\.\s]\d{2,4})\b",  # 12-DEC-2020
         r"\b(\d{1,2}[-/\.\s]\d{1,2}[-/\.\s]\d{2,4})\b",
         r"\b(\d{4}[-/\.\s]\d{1,2}[-/\.\s]\d{1,2})\b",
         r"\b(\d{1,2} [A-Za-z]{3,9} \d{2,4})\b",
@@ -83,7 +173,7 @@ def extract_date_from_text(lines):
         formats = [
             "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d",
             "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y",
-            "%d-%b-%Y", "%d-%b-%y"   # NEW: 12-DEC-2020 or 12-DEC-20
+            "%d-%b-%Y", "%d-%b-%y"
         ]
         for fmt in formats:
             try:
@@ -115,7 +205,9 @@ def extract_date_from_text(lines):
 
     return valid_dates[0][0] if valid_dates else "Not Found"
 
-# ---------------- UPDATED FUNCTION ----------------
+# ---------------- UPDATED FUNCTION: detect_purpose ----------------
+# Breakfast merged into Lunch — only two meal categories: Lunch and Dinner
+
 def detect_purpose(text, expense_date=None):
     text_upper = text.upper()
 
@@ -129,28 +221,31 @@ def detect_purpose(text, expense_date=None):
         if any(k in text_upper for k in keywords):
             return category
 
-    # --- 2️⃣ Meal keywords next (only if not classified above) ---
+    # --- 2️⃣ Meal keywords next (BREAKFAST merged into LUNCH) ---
     meal_keywords = {
-        "BREAKFAST": ["MORNING MEAL", "TEA", "COFFEE", "SNACKS", "CAFE", "IDLI", "DOSA", "POHA", "BREAD", "MILK", "JUICE", "PANCAKE", "OMELETTE", "BREAKFAST COMBO"],
-        "LUNCH": ["THALI", "MEAL", "MIDDAY", "CAFETERIA", "BUFFET", "VEG", "NON-VEG", "LUNCH BOX", "RESTAURANT BILL", "SUBWAY", "KFC", "PIZZA HUT"],
-        "DINNER": ["SUPPER", "NIGHT MEAL", "DINNER BUFFET", "RESTAURANT", "EVENING MEAL", "DINNER COMBO", "FINE DINE", "FOOD COURT", "DOMINOS", "ZOMATO", "SWIGGY"]
+        "LUNCH": [
+            "MORNING MEAL", "TEA", "COFFEE", "SNACKS", "CAFE", "IDLI", "DOSA", "POHA", "BREAD",
+            "MILK", "JUICE", "PANCAKE", "OMELETTE", "BREAKFAST", "BREAKFAST COMBO",
+            "THALI", "MEAL", "MIDDAY", "CAFETERIA", "BUFFET", "VEG", "NON-VEG", "LUNCH BOX",
+            "RESTAURANT BILL", "SUBWAY", "KFC", "PIZZA HUT", "DOMINOS"
+        ],
+        "DINNER": [
+            "SUPPER", "NIGHT MEAL", "DINNER BUFFET", "RESTAURANT", "EVENING MEAL", "DINNER COMBO",
+            "FINE DINE", "FOOD COURT", "ZOMATO", "SWIGGY"
+        ]
     }
 
     # Extract hour if available in expense_date
     meal_by_time = None
     if expense_date and expense_date != "Not Found":
         try:
-            # Try full datetime first (yyyy-mm-dd HH:MM:SS)
             try:
                 dt = datetime.strptime(expense_date, "%Y-%m-%d %H:%M:%S")
             except:
-                # fallback: only date given
                 dt = datetime.strptime(expense_date, "%Y-%m-%d")
-
             hour = dt.hour
-            if hour < 11:
-                meal_by_time = "Breakfast"
-            elif 11 <= hour <= 16:
+            # Merge breakfast into lunch: any hour before 17 treated as Lunch
+            if hour < 17:
                 meal_by_time = "Lunch"
             else:
                 meal_by_time = "Dinner"
@@ -166,7 +261,7 @@ def detect_purpose(text, expense_date=None):
     if "RESTAURANT" in text_upper or "FOOD" in text_upper or "MEAL" in text_upper:
         if meal_by_time:
             return meal_by_time
-        return "Lunch"  # safer default
+        return "Lunch"  # safer default (breakfast merged into lunch)
 
     if meal_by_time:
         return meal_by_time
@@ -238,3 +333,4 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
