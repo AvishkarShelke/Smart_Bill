@@ -28,7 +28,6 @@ def group_words_into_lines(words):
     current_line = []
     prev_y = None
 
-    # Only use words with bounding info
     safe_words = []
     for w in words:
         vertices = w.get("boundingPolygon", {}).get("normalizedVertices", [])
@@ -52,26 +51,17 @@ def group_words_into_lines(words):
     return lines
 
 def _parse_amount_str(s: str):
-    """Cleans an OCR-captured amount string and returns float or None.
-    Handles commas, currency symbols, and accidental spaces.
-    """
     if not s:
         return None
-    # Remove currency symbols and stray letters
     s_clean = re.sub(r"[₹$€£]|INR|USD|EUR|GBP", "", s, flags=re.IGNORECASE)
-    # Remove spaces between digits (like 1 234)
     s_clean = re.sub(r"(?<=\d)\s+(?=\d)", "", s_clean)
-    # Remove any characters except digits, comma and dot
     s_clean = re.sub(r"[^0-9,\.]", "", s_clean)
-    # Remove thousands separators (commas)
     s_clean = s_clean.replace(",", "")
     if s_clean.count(".") > 1:
-        # malformed number like 1.234.56 -> keep last two decimals
         parts = s_clean.split(".")
         s_clean = "".join(parts[:-1]) + "." + parts[-1]
     try:
         val = float(s_clean)
-        # sensible bounds
         if val <= 0 or val > 10_000_000:
             return None
         return val
@@ -79,7 +69,6 @@ def _parse_amount_str(s: str):
         return None
 
 def extract_total_amount(lines: List[str]) -> float:
-    """Improved total extraction logic."""
     prioritized_keywords = [
         "grand total",
         "amount payable",
@@ -102,27 +91,22 @@ def extract_total_amount(lines: List[str]) -> float:
         parsed = [_parse_amount_str(f) for f in found]
         return [p for p in parsed if p is not None]
 
-    # 1) Search prioritized keywords
     for kw in prioritized_keywords:
         for idx, line in enumerate(normalized):
             low = line.lower()
             if kw in low and "sub" not in low:
-                # same line
                 cands = amounts_in_line(line)
                 if cands:
                     return max(cands)
-                # next line
                 if idx + 1 < n_lines:
                     cands = amounts_in_line(normalized[idx + 1])
                     if cands:
                         return max(cands)
-                # previous line
                 if idx - 1 >= 0:
                     cands = amounts_in_line(normalized[idx - 1])
                     if cands:
                         return max(cands)
 
-    # 2) Fallback
     exclude_tokens = ["sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes", "discount", "change"]
     all_candidates = []
     for line in normalized:
@@ -136,7 +120,6 @@ def extract_total_amount(lines: List[str]) -> float:
     if all_candidates:
         return max(all_candidates)
 
-    # 3) Last resort
     any_amounts = []
     for line in normalized:
         any_amounts.extend(amounts_in_line(line))
@@ -190,13 +173,7 @@ def extract_date_from_text(lines):
 
     return valid_dates[0][0] if valid_dates else "Not Found"
 
-# ----------------- NEW HELPER -----------------
 def get_safe_date(date_str: str):
-    """
-    Exception Handling Layer:
-    - If date is missing, 'Not Found', invalid, or '0' → return today's date.
-    - Keeps old logic intact.
-    """
     try:
         if not date_str or date_str in ["Not Found", "0", "0000-00-00"]:
             return datetime.today().strftime("%Y-%m-%d")
@@ -205,9 +182,11 @@ def get_safe_date(date_str: str):
     except:
         return datetime.today().strftime("%Y-%m-%d")
 
-# ---------------- detect_purpose (unchanged except Breakfast merged) ----------------
+# ---------------- detect_purpose (reprioritized) ----------------
 def detect_purpose(text, expense_date=None):
     text_upper = text.upper()
+
+    # Store-based detection (priority: Supplies & Shopping)
     store_keywords = {
         "Supplies": ["DMART", "BIG BAZAAR", "RELIANCE", "METRO", "SHOPPER STOP", "LIFESTYLE", "RELIANCE TRENDS"],
         "Shopping": ["AMAZON", "FLIPKART", "MYNTRA", "AJIO"]
@@ -216,18 +195,42 @@ def detect_purpose(text, expense_date=None):
         if any(k in text_upper for k in keywords):
             return category
 
+    # Travel-related
+    if any(k in text_upper for k in ["AIRLINES", "FLIGHT", "AIR TICKET", "BOARDING PASS", "INDIGO", "SPICEJET", "VISTARA", "GOFIRST", "AKASA", "EMIRATES", "QATAR AIRWAYS", "JET", "AIRPORT"]):
+        return "Air"
+    if any(k in text_upper for k in ["CAB", "TAXI", "AUTO", "RIDE", "OLA", "UBER", "RAPIDO", "MERU", "CNG RICKSHAW"]):
+        return "Taxi"
+    if any(k in text_upper for k in ["CAR RENTAL", "ZOOMCAR", "REVV", "HERTZ", "AVIS", "ENTERPRISE RENTAL", "SELF DRIVE", "VEHICLE HIRE"]):
+        return "Car Rental"
+    if any(k in text_upper for k in ["PARKING", "TOLL", "GARAGE", "CAR PARK", "VEHICLE PARKING", "MALL PARKING", "HIGHWAY PARKING"]):
+        return "Parking"
+    if any(k in text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION", "HP", "INDIANOIL", "BPCL", "SHELL", "REFUEL"]):
+        return "Fuel"
+
+    # Accommodation
+    if any(k in text_upper for k in ["HOTEL", "RESORT", "LODGE", "INN", "MOTEL", "SUITE", "ROOM CHARGE", "STAY", "ACCOMMODATION", "GUEST HOUSE", "BOOKING.COM", "EXPEDIA", "MAKEMYTRIP"]):
+        return "Hotel"
+
+    # Entertainment
+    if any(k in text_upper for k in ["MOVIE", "CINEMA", "THEATRE", "PVR", "INOX", "BOOKMYSHOW", "NETFLIX", "PRIME", "HOTSTAR", "SPOTIFY", "CONCERT", "EVENT", "SHOW", "GAMING", "SHOPPING", "MALL", "FASHION", "CLOTHES", "GARMENTS", "FOOTWEAR"]):
+        return "Entertainment"
+
+    # Office & Medical
+    if any(k in text_upper for k in ["STATIONERY", "OFFICE SUPPLY", "PENS", "PRINTER", "CARTRIDGE", "INK", "TONER", "PAPER", "DIARY", "REGISTER", "FILE", "MARKER", "WHITEBOARD", "LAPTOP", "DESKTOP", "MONITOR", "KEYBOARD", "MOUSE", "SCANNER", "HEADPHONES", "EARPHONES", "SPEAKER", "CHARGER", "BATTERY", "ROUTER", "USB", "SSD", "HDD", "MOBILE", "TABLET", "CABLES", "PROJECTOR", "CAMERA", "ELECTRONIC BILL", "ELECTRONIC INVOICE"]):
+        return "Supplies"
+    if any(k in text_upper for k in ["HOSPITAL", "PHARMACY", "DOCTOR", "CLINIC", "SURGERY", "MEDICINE", "TABLET", "INJECTION", "LAB", "DIAGNOSTIC", "PATHOLOGY", "XRAY", "SCAN", "MRI", "CHEMIST"]):
+        return "Miscellaneous"
+
+    # Meals (lowest priority)
     meal_keywords = {
-        "LUNCH": [
-            "MORNING MEAL", "TEA", "COFFEE", "SNACKS", "CAFE", "IDLI", "DOSA", "POHA", "BREAD",
-            "MILK", "JUICE", "PANCAKE", "OMELETTE", "BREAKFAST", "BREAKFAST COMBO",
-            "THALI", "MEAL", "MIDDAY", "CAFETERIA", "BUFFET", "VEG", "NON-VEG", "LUNCH BOX",
-            "RESTAURANT BILL", "SUBWAY", "KFC", "PIZZA HUT", "DOMINOS"
-        ],
-        "DINNER": [
-            "SUPPER", "NIGHT MEAL", "DINNER BUFFET", "RESTAURANT", "EVENING MEAL", "DINNER COMBO",
-            "FINE DINE", "FOOD COURT", "ZOMATO", "SWIGGY"
-        ]
+        "Lunch": ["MORNING MEAL", "TEA", "COFFEE", "SNACKS", "CAFE", "IDLI", "DOSA", "POHA", "BREAD",
+                  "MILK", "JUICE", "PANCAKE", "OMELETTE", "BREAKFAST", "BREAKFAST COMBO",
+                  "THALI", "MEAL", "MIDDAY", "CAFETERIA", "BUFFET", "VEG", "NON-VEG", "LUNCH BOX",
+                  "RESTAURANT BILL", "SUBWAY", "KFC", "PIZZA HUT", "DOMINOS"],
+        "Dinner": ["SUPPER", "NIGHT MEAL", "DINNER BUFFET", "RESTAURANT", "EVENING MEAL", "DINNER COMBO",
+                   "FINE DINE", "FOOD COURT", "ZOMATO", "SWIGGY"]
     }
+
     meal_by_time = None
     if expense_date and expense_date != "Not Found":
         try:
@@ -245,7 +248,7 @@ def detect_purpose(text, expense_date=None):
 
     for meal, keywords in meal_keywords.items():
         if any(k in text_upper for k in keywords):
-            return meal.capitalize()
+            return meal
 
     if "RESTAURANT" in text_upper or "FOOD" in text_upper or "MEAL" in text_upper:
         if meal_by_time:
@@ -255,28 +258,8 @@ def detect_purpose(text, expense_date=None):
     if meal_by_time:
         return meal_by_time
 
-    if any(k in text_upper for k in ["CAB", "TAXI", "AUTO", "RIDE", "OLA", "UBER", "RAPIDO", "MERU", "CNG RICKSHAW"]):
-        return "Taxi"
-    elif any(k in text_upper for k in ["PARKING", "TOLL", "GARAGE", "CAR PARK", "VEHICLE PARKING", "MALL PARKING", "HIGHWAY PARKING"]):
-        return "Parking"
-    elif any(k in text_upper for k in ["HOTEL", "RESORT", "LODGE", "INN", "MOTEL", "SUITE", "ROOM CHARGE", "STAY", "ACCOMMODATION", "GUEST HOUSE", "BOOKING.COM", "EXPEDIA", "MAKEMYTRIP"]):
-        return "Hotel"
-    elif any(k in text_upper for k in ["AIRLINES", "FLIGHT", "AIR TICKET", "BOARDING PASS", "INDIGO", "SPICEJET", "VISTARA", "GOFIRST", "AKASA", "EMIRATES", "QATAR AIRWAYS", "JET", "AIRPORT"]):
-        return "Air"
-    elif any(k in text_upper for k in ["CAR RENTAL", "ZOOMCAR", "REVV", "HERTZ", "AVIS", "ENTERPRISE RENTAL", "SELF DRIVE", "VEHICLE HIRE"]):
-        return "Car Rental"
-    elif any(k in text_upper for k in ["MOVIE", "CINEMA", "THEATRE", "PVR", "INOX", "BOOKMYSHOW", "NETFLIX", "PRIME", "HOTSTAR", "SPOTIFY", "CONCERT", "EVENT", "SHOW", "GAMING", "SHOPPING", "MALL", "FASHION", "CLOTHES", "GARMENTS", "FOOTWEAR"]):
-        return "Entertainment"
-    elif any(k in text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION", "HP", "INDIANOIL", "BPCL", "SHELL", "REFUEL"]):
-        return "Fuel"
-    elif any(k in text_upper for k in ["STATIONERY", "OFFICE SUPPLY", "PENS", "PRINTER", "CARTRIDGE", "INK", "TONER", "PAPER", "DIARY", "REGISTER", "FILE", "MARKER", "WHITEBOARD", "LAPTOP", "DESKTOP", "MONITOR", "KEYBOARD", "MOUSE", "SCANNER", "HEADPHONES", "EARPHONES", "SPEAKER", "CHARGER", "BATTERY", "ROUTER", "USB", "SSD", "HDD", "MOBILE", "TABLET", "CABLES", "PROJECTOR", "CAMERA", "ELECTRONIC BILL", "ELECTRONIC INVOICE"]):
-        return "Supplies"
-    elif any(k in text_upper for k in ["HOSPITAL", "PHARMACY", "DOCTOR", "CLINIC", "SURGERY", "MEDICINE", "TABLET", "INJECTION", "LAB", "DIAGNOSTIC", "PATHOLOGY", "XRAY", "SCAN", "MRI", "CHEMIST"]):
-        return "Miscellaneous"
-
     return "Miscellaneous"
 
-# ---------------- API ----------------
 @app.post("/extract-expense-info")
 async def extract_expense_info(payload: OCRRequest):
     try:
@@ -295,7 +278,6 @@ async def extract_expense_info(payload: OCRRequest):
 
         total = extract_total_amount(lines)
 
-        # ---------------- New Safe Date Handling ----------------
         raw_expense_date = extract_date_from_text(lines)
         expense_date = get_safe_date(raw_expense_date)
 
@@ -318,6 +300,7 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
