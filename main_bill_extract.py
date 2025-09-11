@@ -208,7 +208,7 @@ def detect_purpose(text, expense_date=None):
         return "Fuel"
 
     # Accommodation
-    if any(k in text_upper for k in ["HOTEL", "RESORT", "LODGE", "INN", "MOTEL", "SUITE", "ROOM CHARGE", "STAY", "ACCOMMODATION", "GUEST HOUSE", "BOOKING.COM", "EXPEDIA", "MAKEMYTRIP"]):
+    if any(k in text_upper for k in ["ROOM NO", "RESORT", "LODGE", "INN", "INN TIME","OUT TIME","MOTEL", "SUITE", "ROOM CHARGE", "STAY", "ACCOMMODATION", "GUEST HOUSE", "BOOKING.COM", "EXPEDIA", "MAKEMYTRIP"]):
         return "Hotel"
 
     # Entertainment
