@@ -79,6 +79,8 @@ def extract_total_amount(lines: List[str]) -> float:
         "balance due",
         "amount payable from customer",
         "upi payment",
+        "net amt"
+        "net amount"
         "total",
     ]
 
