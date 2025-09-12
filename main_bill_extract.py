@@ -77,12 +77,12 @@ def extract_total_amount(lines: List[str]) -> float:
         "total payable",
         "total amount",
         "balance due",
-        "total bill amount"
-        "bill amount"
+        "total bill amount",
+        "bill amount",
         "amount payable from customer",
         "upi payment",
-        "net amt"
-        "net amount"
+        "net amt",
+        "net amount",
         "total",
     ]
 
@@ -95,6 +95,7 @@ def extract_total_amount(lines: List[str]) -> float:
         parsed = [_parse_amount_str(f) for f in found]
         return [p for p in parsed if p is not None]
 
+    # 1️⃣ Try prioritized keywords first
     for kw in prioritized_keywords:
         for idx, line in enumerate(normalized):
             low = line.lower()
@@ -111,26 +112,53 @@ def extract_total_amount(lines: List[str]) -> float:
                     if cands:
                         return max(cands)
 
+    # 2️⃣ Collect candidates (excluding known non-totals)
     exclude_tokens = ["sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes", "discount", "change"]
-    all_candidates = []
-    for line in normalized:
+    candidates = []
+    for idx, line in enumerate(normalized):
         low = line.lower()
         if any(tok in low for tok in exclude_tokens):
             continue
         cands = amounts_in_line(line)
-        if cands:
-            all_candidates.extend(cands)
+        for c in cands:
+            candidates.append((c, line, idx))
 
-    if all_candidates:
-        return max(all_candidates)
+    if not candidates:
+        return 0.0
 
-    any_amounts = []
-    for line in normalized:
-        any_amounts.extend(amounts_in_line(line))
-    if any_amounts:
-        return max(any_amounts)
+    # 3️⃣ Old logic: pick max
+    picked = max([c for c, _, _ in candidates])
 
-    return 0.0
+    # 4️⃣ Intelligent fallback check
+    # If picked looks suspicious (too small or outlier), rescore
+    if picked < 10 or picked < (max([c for c, _, _ in candidates]) * 0.2):
+        scored = []
+        n = len(normalized)
+        for amount, line, idx in candidates:
+            score = 0
+            low = line.lower()
+
+            # keyword weight
+            if any(k in low for k in ["total", "amount", "due", "payable", "bill", "net"]):
+                score += 5
+            if "net" in low or "payable" in low:
+                score += 2  # stronger keywords
+
+            # position weight (top/bottom often carries totals)
+            if idx < n * 0.2 or idx > n * 0.8:
+                score += 2
+
+            # realistic value range
+            if 5 <= amount <= 100000:
+                score += 1
+
+            scored.append((score, amount))
+
+        # ✅ Pick the best-scored candidate
+        best = max(scored, key=lambda x: (x[0], x[1]))
+        return best[1]
+
+    return picked
 
 def extract_date_from_text(lines):
     date_patterns = [
