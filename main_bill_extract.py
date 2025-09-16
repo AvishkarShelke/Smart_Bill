@@ -89,7 +89,6 @@ def extract_total_amount(lines: List[str]) -> float:
     normalized = [ln for ln in lines]
     n_lines = len(normalized)
 
-    # ✅ safer pattern: avoids merging numbers across spaces
     amount_pattern = re.compile(r"\b\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\b")
 
     def amounts_in_line(line: str):
@@ -97,11 +96,11 @@ def extract_total_amount(lines: List[str]) -> float:
         parsed = [_parse_amount_str(f) for f in found]
         return [p for p in parsed if p is not None]
 
-    # 1️⃣ Try prioritized keywords first (with neighbors)
+    # 1️⃣ Prioritized keyword scan
     for kw in prioritized_keywords:
         for idx, line in enumerate(normalized):
             low = line.lower()
-            if kw in low and "sub" not in low:
+            if kw in low and not any(x in low for x in ["sub", "qty", "quantity"]):  # ⛔ skip qty/sub
                 cands = amounts_in_line(line)
                 if cands:
                     return max(cands)
@@ -114,8 +113,11 @@ def extract_total_amount(lines: List[str]) -> float:
                     if cands:
                         return max(cands)
 
-    # 2️⃣ Collect candidates (excluding known non-totals)
-    exclude_tokens = ["sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes", "discount", "change"]
+    # 2️⃣ Collect fallback candidates
+    exclude_tokens = [
+        "sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes",
+        "discount", "change", "qty", "quantity", "total qty"
+    ]
     candidates = []
     for idx, line in enumerate(normalized):
         low = line.lower()
@@ -128,37 +130,25 @@ def extract_total_amount(lines: List[str]) -> float:
     if not candidates:
         return 0.0
 
-    # 3️⃣ Compute itemized average (for sanity check)
-    item_values = [c for c, _, _ in candidates if c < 50000]
-    avg_item = sum(item_values) / len(item_values) if item_values else 0
-
-    # 4️⃣ Scoring system for fallback
+    # 3️⃣ Scoring candidates
     scored = []
     for amount, line, idx in candidates:
         score = 0
         low = line.lower()
 
-        # keyword context
-        if any(k in low for k in ["total", "amount", "due", "payable", "bill", "net"]):
+        if any(k in low for k in ["grand", "total", "amount", "due", "payable", "bill", "net"]):
             score += 5
-        if "net" in low or "payable" in low:
+        if "grand" in low or "payable" in low:
+            score += 3
+
+        if idx < n_lines * 0.2 or idx > n_lines * 0.8:  # top/bottom of bill
             score += 2
 
-        # position (top/bottom often carries totals)
-        if idx < n_lines * 0.2 or idx > n_lines * 0.8:
-            score += 2
-
-        # realistic range
         if 5 <= amount <= 100000:
             score += 1
 
-        # sanity check against average
-        if avg_item > 0 and amount > avg_item * 20:
-            score -= 5
-
         scored.append((score, amount))
 
-    # 5️⃣ Pick best candidate
     best = max(scored, key=lambda x: (x[0], x[1]))
     return best[1]
 
