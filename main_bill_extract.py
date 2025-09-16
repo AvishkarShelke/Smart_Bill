@@ -88,16 +88,14 @@ def extract_total_amount(lines: List[str]) -> float:
 
     normalized = [ln for ln in lines]
     n_lines = len(normalized)
-
-    # ✅ safer pattern: avoids merging numbers across spaces
-    amount_pattern = re.compile(r"\b\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\b")
+    amount_pattern = re.compile(r"[\d,]+(?:\.\d{1,2})?")
 
     def amounts_in_line(line: str):
-        found = amount_pattern.findall(line)
+        found = amount_pattern.findall(line.replace(" ", ""))
         parsed = [_parse_amount_str(f) for f in found]
         return [p for p in parsed if p is not None]
 
-    # 1️⃣ Try prioritized keywords first (with neighbors)
+    # 1️⃣ Try prioritized keywords first
     for kw in prioritized_keywords:
         for idx, line in enumerate(normalized):
             low = line.lower()
@@ -128,39 +126,39 @@ def extract_total_amount(lines: List[str]) -> float:
     if not candidates:
         return 0.0
 
-    # 3️⃣ Compute itemized average (for sanity check)
-    item_values = [c for c, _, _ in candidates if c < 50000]
-    avg_item = sum(item_values) / len(item_values) if item_values else 0
+    # 3️⃣ Old logic: pick max
+    picked = max([c for c, _, _ in candidates])
 
-    # 4️⃣ Scoring system for fallback
-    scored = []
-    for amount, line, idx in candidates:
-        score = 0
-        low = line.lower()
+    # 4️⃣ Intelligent fallback check
+    # If picked looks suspicious (too small or outlier), rescore
+    if picked < 10 or picked < (max([c for c, _, _ in candidates]) * 0.2):
+        scored = []
+        n = len(normalized)
+        for amount, line, idx in candidates:
+            score = 0
+            low = line.lower()
 
-        # keyword context
-        if any(k in low for k in ["total", "amount", "due", "payable", "bill", "net"]):
-            score += 5
-        if "net" in low or "payable" in low:
-            score += 2
+            # keyword weight
+            if any(k in low for k in ["total", "amount", "due", "payable", "bill", "net"]):
+                score += 5
+            if "net" in low or "payable" in low:
+                score += 2  # stronger keywords
 
-        # position (top/bottom often carries totals)
-        if idx < n_lines * 0.2 or idx > n_lines * 0.8:
-            score += 2
+            # position weight (top/bottom often carries totals)
+            if idx < n * 0.2 or idx > n * 0.8:
+                score += 2
 
-        # realistic range
-        if 5 <= amount <= 100000:
-            score += 1
+            # realistic value range
+            if 5 <= amount <= 100000:
+                score += 1
 
-        # sanity check against average
-        if avg_item > 0 and amount > avg_item * 20:
-            score -= 5
+            scored.append((score, amount))
 
-        scored.append((score, amount))
+        # ✅ Pick the best-scored candidate
+        best = max(scored, key=lambda x: (x[0], x[1]))
+        return best[1]
 
-    # 5️⃣ Pick best candidate
-    best = max(scored, key=lambda x: (x[0], x[1]))
-    return best[1]
+    return picked
 
 def extract_date_from_text(lines):
     date_patterns = [
@@ -216,11 +214,11 @@ def get_safe_date(date_str: str):
     except:
         return datetime.today().strftime("%Y-%m-%d")
 
-# ---------------- detect_purpose ----------------
+# ---------------- detect_purpose (reprioritized) ----------------
 def detect_purpose(text, expense_date=None):
     text_upper = text.upper()
 
-    # Store-based detection
+    # Store-based detection (priority: Supplies & Shopping)
     store_keywords = {
         "Supplies": ["DMART", "BIG BAZAAR", "RELIANCE", "METRO", "SHOPPER STOP", "LIFESTYLE", "RELIANCE TRENDS"],
         "Shopping": ["AMAZON", "FLIPKART", "MYNTRA", "AJIO"]
@@ -255,7 +253,7 @@ def detect_purpose(text, expense_date=None):
     if any(k in text_upper for k in ["HOSPITAL", "PHARMACY", "DOCTOR", "CLINIC", "SURGERY", "MEDICINE", "TABLET", "INJECTION", "LAB", "DIAGNOSTIC", "PATHOLOGY", "XRAY", "SCAN", "MRI", "CHEMIST"]):
         return "Miscellaneous"
 
-    # Meals
+    # Meals (lowest priority)
     meal_keywords = {
         "Lunch": ["MORNING MEAL", "TEA", "COFFEE", "SNACKS", "CAFE", "IDLI", "DOSA", "POHA", "BREAD",
                   "MILK", "JUICE", "PANCAKE", "OMELETTE", "BREAKFAST", "BREAKFAST COMBO",
