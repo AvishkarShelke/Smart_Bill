@@ -113,24 +113,45 @@ def extract_total_amount(lines: List[str]) -> float:
                     if cands:
                         return max(cands)
 
-    # 2️⃣ Collect fallback candidates
+    # 2️⃣ Collect candidates, but exclude known non-totals
     exclude_tokens = [
-        "sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes",
-        "discount", "change", "qty", "quantity", "total qty"
+        "sub total", "subtotal", "cgst", "sgst", "igst",
+        "vat", "tax", "taxes", "discount", "change",
+        "qty", "quantity", "total qty"
     ]
     candidates = []
+    subtotal = None
+    tax_total = 0.0
+
     for idx, line in enumerate(normalized):
         low = line.lower()
+        cands = amounts_in_line(line)
+
+        # detect subtotal separately
+        if "sub total" in low or "subtotal" in low:
+            if cands:
+                subtotal = max(cands)
+
+        # detect tax amounts separately
+        if any(tok in low for tok in ["cgst", "sgst", "igst", "vat", "tax"]):
+            if cands:
+                tax_total += sum(cands)
+            continue
+
         if any(tok in low for tok in exclude_tokens):
             continue
-        cands = amounts_in_line(line)
+
         for c in cands:
             candidates.append((c, line, idx))
+
+    # 3️⃣ If no candidates but we have subtotal + taxes → compute fallback total
+    if not candidates and subtotal:
+        return subtotal + tax_total
 
     if not candidates:
         return 0.0
 
-    # 3️⃣ Scoring candidates
+    # 4️⃣ Scoring candidates
     scored = []
     for amount, line, idx in candidates:
         score = 0
@@ -149,8 +170,15 @@ def extract_total_amount(lines: List[str]) -> float:
 
         scored.append((score, amount))
 
-    best = max(scored, key=lambda x: (x[0], x[1]))
-    return best[1]
+    # 5️⃣ Pick best candidate, but sanity-check against largest number
+    best_score, best_amount = max(scored, key=lambda x: (x[0], x[1]))
+    max_amount = max(a for _, a in scored)
+
+    # If largest amount is much bigger → trust it
+    if max_amount > best_amount and max_amount >= 2 * best_amount:
+        return max_amount
+
+    return best_amount
 
 def extract_date_from_text(lines):
     date_patterns = [
