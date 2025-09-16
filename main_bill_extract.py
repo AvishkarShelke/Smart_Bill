@@ -27,7 +27,6 @@ def group_words_into_lines(words):
     lines = []
     current_line = []
     prev_y = None
-
     safe_words = []
     for w in words:
         vertices = w.get("boundingPolygon", {}).get("normalizedVertices", [])
@@ -68,7 +67,7 @@ def _parse_amount_str(s: str):
     except:
         return None
 
-def extract_total_amount(lines: List[str]) -> float:
+def extract_total_amount(lines: List[str], debug: bool = False) -> float:
     prioritized_keywords = [
         "grand total",
         "amount payable",
@@ -88,10 +87,12 @@ def extract_total_amount(lines: List[str]) -> float:
 
     normalized = [ln for ln in lines]
     n_lines = len(normalized)
-    amount_pattern = re.compile(r"[\d,]+(?:\.\d{1,2})?")
+
+    # ✅ safer pattern: avoids merging numbers across spaces
+    amount_pattern = re.compile(r"\b\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\b")
 
     def amounts_in_line(line: str):
-        found = amount_pattern.findall(line.replace(" ", ""))
+        found = amount_pattern.findall(line)
         parsed = [_parse_amount_str(f) for f in found]
         return [p for p in parsed if p is not None]
 
@@ -102,14 +103,17 @@ def extract_total_amount(lines: List[str]) -> float:
             if kw in low and "sub" not in low:
                 cands = amounts_in_line(line)
                 if cands:
+                    if debug: print(f"[KEYWORD MATCH] {kw} → {cands}")
                     return max(cands)
                 if idx + 1 < n_lines:
                     cands = amounts_in_line(normalized[idx + 1])
                     if cands:
+                        if debug: print(f"[NEIGHBOR BELOW] {kw} → {cands}")
                         return max(cands)
                 if idx - 1 >= 0:
                     cands = amounts_in_line(normalized[idx - 1])
                     if cands:
+                        if debug: print(f"[NEIGHBOR ABOVE] {kw} → {cands}")
                         return max(cands)
 
     # 2️⃣ Collect candidates (excluding known non-totals)
@@ -124,13 +128,14 @@ def extract_total_amount(lines: List[str]) -> float:
             candidates.append((c, line, idx))
 
     if not candidates:
+        if debug: print("[NO CANDIDATES FOUND]")
         return 0.0
 
     # 3️⃣ Compute itemized average (for sanity check)
-    item_values = [c for c, _, _ in candidates if c < 50000]  # ignore suspiciously large numbers
+    item_values = [c for c, _, _ in candidates if c < 50000]
     avg_item = sum(item_values) / len(item_values) if item_values else 0
 
-    # 4️⃣ Scoring system for fallback
+    # 4️⃣ Scoring system
     scored = []
     for amount, line, idx in candidates:
         score = 0
@@ -142,22 +147,33 @@ def extract_total_amount(lines: List[str]) -> float:
         if "net" in low or "payable" in low:
             score += 2
 
-        # position (top/bottom)
-        if idx < n_lines * 0.2 or idx > n_lines * 0.8:
-            score += 2
+        # position (bottom preferred for totals)
+        if idx > n_lines * 0.8:
+            score += 3
+        elif idx < n_lines * 0.2:
+            score += 1
 
         # realistic range
-        if 5 <= amount <= 100000:
+        if 10 <= amount <= 100000:
             score += 1
+        if amount < 10:
+            score -= 3  # too small, unlikely total
 
         # sanity check against average
         if avg_item > 0 and amount > avg_item * 20:
-            score -= 5  # penalize huge outliers
+            score -= 5
 
-        scored.append((score, amount))
+        scored.append((score, amount, line.strip()))
 
     # 5️⃣ Pick best candidate
     best = max(scored, key=lambda x: (x[0], x[1]))
+
+    if debug:
+        print("\n[ALL CANDIDATES]")
+        for s, amt, ln in scored:
+            print(f"Line: {ln} | Amount: {amt} | Score: {s}")
+        print(f"\n[FINAL PICK] {best[1]} from line: {best[2]} (Score {best[0]})")
+
     return best[1]
 
 def extract_date_from_text(lines):
