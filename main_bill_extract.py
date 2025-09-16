@@ -95,22 +95,47 @@ def extract_total_amount(lines: List[str]) -> float:
         parsed = [_parse_amount_str(f) for f in found]
         return [p for p in parsed if p is not None]
 
-    # 1️⃣ Try prioritized keywords first
+    # ✅ improved prioritized-keyword neighbor search
+    qty_re = re.compile(r'\b(item|items|qty|no\.?|pcs|piece|item\(s\))\b', re.I)
+
     for kw in prioritized_keywords:
         for idx, line in enumerate(normalized):
             low = line.lower()
             if kw in low and "sub" not in low:
-                cands = amounts_in_line(line)
-                if cands:
-                    return max(cands)
-                if idx + 1 < n_lines:
-                    cands = amounts_in_line(normalized[idx + 1])
-                    if cands:
-                        return max(cands)
-                if idx - 1 >= 0:
-                    cands = amounts_in_line(normalized[idx - 1])
-                    if cands:
-                        return max(cands)
+                # collect amounts from same, previous, next lines
+                neighbor_idxs = [idx, idx - 1, idx + 1]
+                neighbor_cands = []
+                for j in neighbor_idxs:
+                    if 0 <= j < n_lines:
+                        cands = amounts_in_line(normalized[j])
+                        for a in cands:
+                            neighbor_cands.append((a, j, normalized[j]))
+
+                if not neighbor_cands:
+                    continue
+
+                # drop obvious qty/item lines where the number is an integer
+                filtered = []
+                for a, j, l in neighbor_cands:
+                    if qty_re.search(l) and float(a).is_integer():
+                        continue
+                    filtered.append((a, j, l))
+
+                if filtered:
+                    def _score(t):
+                        a, j, l = t
+                        score = 0
+                        if '.' in str(a):
+                            score += 2   # decimals look more like totals
+                        if j > n_lines * 0.6:
+                            score += 1   # prefer amounts near bottom
+                        score += (a / (1 + a))  # tie-breaker for larger values
+                        return (score, a)
+                    best = max(filtered, key=_score)
+                    return best[0]
+
+                # fallback: nothing survived filter → return max neighbor amount
+                return max(a for a, _, _ in neighbor_cands)
 
     # 2️⃣ Collect candidates (excluding known non-totals)
     exclude_tokens = ["sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes", "discount", "change"]
@@ -126,39 +151,30 @@ def extract_total_amount(lines: List[str]) -> float:
     if not candidates:
         return 0.0
 
-    # 3️⃣ Old logic: pick max
+    # 3️⃣ Pick max normally
     picked = max([c for c, _, _ in candidates])
 
     # 4️⃣ Intelligent fallback check
-    # If picked looks suspicious (too small or outlier), rescore
     if picked < 10 or picked < (max([c for c, _, _ in candidates]) * 0.2):
         scored = []
-        n = len(normalized)
         for amount, line, idx in candidates:
             score = 0
             low = line.lower()
-
-            # keyword weight
             if any(k in low for k in ["total", "amount", "due", "payable", "bill", "net"]):
                 score += 5
             if "net" in low or "payable" in low:
-                score += 2  # stronger keywords
-
-            # position weight (top/bottom often carries totals)
-            if idx < n * 0.2 or idx > n * 0.8:
                 score += 2
-
-            # realistic value range
+            if idx < n_lines * 0.2 or idx > n_lines * 0.8:
+                score += 2
             if 5 <= amount <= 100000:
                 score += 1
-
             scored.append((score, amount))
 
-        # ✅ Pick the best-scored candidate
         best = max(scored, key=lambda x: (x[0], x[1]))
         return best[1]
 
     return picked
+
 
 def extract_date_from_text(lines):
     date_patterns = [
