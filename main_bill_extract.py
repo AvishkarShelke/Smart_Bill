@@ -27,6 +27,7 @@ def group_words_into_lines(words):
     lines = []
     current_line = []
     prev_y = None
+
     safe_words = []
     for w in words:
         vertices = w.get("boundingPolygon", {}).get("normalizedVertices", [])
@@ -67,7 +68,7 @@ def _parse_amount_str(s: str):
     except:
         return None
 
-def extract_total_amount(lines: List[str], debug: bool = False) -> float:
+def extract_total_amount(lines: List[str]) -> float:
     prioritized_keywords = [
         "grand total",
         "amount payable",
@@ -103,17 +104,14 @@ def extract_total_amount(lines: List[str], debug: bool = False) -> float:
             if kw in low and "sub" not in low:
                 cands = amounts_in_line(line)
                 if cands:
-                    if debug: print(f"[KEYWORD MATCH] {kw} → {cands}")
                     return max(cands)
                 if idx + 1 < n_lines:
                     cands = amounts_in_line(normalized[idx + 1])
                     if cands:
-                        if debug: print(f"[NEIGHBOR BELOW] {kw} → {cands}")
                         return max(cands)
                 if idx - 1 >= 0:
                     cands = amounts_in_line(normalized[idx - 1])
                     if cands:
-                        if debug: print(f"[NEIGHBOR ABOVE] {kw} → {cands}")
                         return max(cands)
 
     # 2️⃣ Collect candidates (excluding known non-totals)
@@ -128,14 +126,13 @@ def extract_total_amount(lines: List[str], debug: bool = False) -> float:
             candidates.append((c, line, idx))
 
     if not candidates:
-        if debug: print("[NO CANDIDATES FOUND]")
         return 0.0
 
     # 3️⃣ Compute itemized average (for sanity check)
     item_values = [c for c, _, _ in candidates if c < 50000]
     avg_item = sum(item_values) / len(item_values) if item_values else 0
 
-    # 4️⃣ Scoring system
+    # 4️⃣ Scoring system for fallback
     scored = []
     for amount, line, idx in candidates:
         score = 0
@@ -147,33 +144,22 @@ def extract_total_amount(lines: List[str], debug: bool = False) -> float:
         if "net" in low or "payable" in low:
             score += 2
 
-        # position (bottom preferred for totals)
-        if idx > n_lines * 0.8:
-            score += 3
-        elif idx < n_lines * 0.2:
-            score += 1
+        # position (top/bottom often carries totals)
+        if idx < n_lines * 0.2 or idx > n_lines * 0.8:
+            score += 2
 
         # realistic range
-        if 10 <= amount <= 100000:
+        if 5 <= amount <= 100000:
             score += 1
-        if amount < 10:
-            score -= 3  # too small, unlikely total
 
         # sanity check against average
         if avg_item > 0 and amount > avg_item * 20:
             score -= 5
 
-        scored.append((score, amount, line.strip()))
+        scored.append((score, amount))
 
     # 5️⃣ Pick best candidate
     best = max(scored, key=lambda x: (x[0], x[1]))
-
-    if debug:
-        print("\n[ALL CANDIDATES]")
-        for s, amt, ln in scored:
-            print(f"Line: {ln} | Amount: {amt} | Score: {s}")
-        print(f"\n[FINAL PICK] {best[1]} from line: {best[2]} (Score {best[0]})")
-
     return best[1]
 
 def extract_date_from_text(lines):
@@ -230,11 +216,11 @@ def get_safe_date(date_str: str):
     except:
         return datetime.today().strftime("%Y-%m-%d")
 
-# ---------------- detect_purpose (reprioritized) ----------------
+# ---------------- detect_purpose ----------------
 def detect_purpose(text, expense_date=None):
     text_upper = text.upper()
 
-    # Store-based detection (priority: Supplies & Shopping)
+    # Store-based detection
     store_keywords = {
         "Supplies": ["DMART", "BIG BAZAAR", "RELIANCE", "METRO", "SHOPPER STOP", "LIFESTYLE", "RELIANCE TRENDS"],
         "Shopping": ["AMAZON", "FLIPKART", "MYNTRA", "AJIO"]
@@ -269,7 +255,7 @@ def detect_purpose(text, expense_date=None):
     if any(k in text_upper for k in ["HOSPITAL", "PHARMACY", "DOCTOR", "CLINIC", "SURGERY", "MEDICINE", "TABLET", "INJECTION", "LAB", "DIAGNOSTIC", "PATHOLOGY", "XRAY", "SCAN", "MRI", "CHEMIST"]):
         return "Miscellaneous"
 
-    # Meals (lowest priority)
+    # Meals
     meal_keywords = {
         "Lunch": ["MORNING MEAL", "TEA", "COFFEE", "SNACKS", "CAFE", "IDLI", "DOSA", "POHA", "BREAD",
                   "MILK", "JUICE", "PANCAKE", "OMELETTE", "BREAKFAST", "BREAKFAST COMBO",
@@ -348,3 +334,4 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
