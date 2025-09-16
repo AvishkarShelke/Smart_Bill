@@ -95,7 +95,7 @@ def extract_total_amount(lines: List[str]) -> float:
         parsed = [_parse_amount_str(f) for f in found]
         return [p for p in parsed if p is not None]
 
-    # 1️⃣ Try prioritized keywords first
+    # 1️⃣ Try prioritized keywords first (with neighbors)
     for kw in prioritized_keywords:
         for idx, line in enumerate(normalized):
             low = line.lower()
@@ -126,39 +126,39 @@ def extract_total_amount(lines: List[str]) -> float:
     if not candidates:
         return 0.0
 
-    # 3️⃣ Old logic: pick max
-    picked = max([c for c, _, _ in candidates])
+    # 3️⃣ Compute itemized average (for sanity check)
+    item_values = [c for c, _, _ in candidates if c < 50000]  # ignore suspiciously large numbers
+    avg_item = sum(item_values) / len(item_values) if item_values else 0
 
-    # 4️⃣ Intelligent fallback check
-    # If picked looks suspicious (too small or outlier), rescore
-    if picked < 10 or picked < (max([c for c, _, _ in candidates]) * 0.2):
-        scored = []
-        n = len(normalized)
-        for amount, line, idx in candidates:
-            score = 0
-            low = line.lower()
+    # 4️⃣ Scoring system for fallback
+    scored = []
+    for amount, line, idx in candidates:
+        score = 0
+        low = line.lower()
 
-            # keyword weight
-            if any(k in low for k in ["total", "amount", "due", "payable", "bill", "net"]):
-                score += 5
-            if "net" in low or "payable" in low:
-                score += 2  # stronger keywords
+        # keyword context
+        if any(k in low for k in ["total", "amount", "due", "payable", "bill", "net"]):
+            score += 5
+        if "net" in low or "payable" in low:
+            score += 2
 
-            # position weight (top/bottom often carries totals)
-            if idx < n * 0.2 or idx > n * 0.8:
-                score += 2
+        # position (top/bottom)
+        if idx < n_lines * 0.2 or idx > n_lines * 0.8:
+            score += 2
 
-            # realistic value range
-            if 5 <= amount <= 100000:
-                score += 1
+        # realistic range
+        if 5 <= amount <= 100000:
+            score += 1
 
-            scored.append((score, amount))
+        # sanity check against average
+        if avg_item > 0 and amount > avg_item * 20:
+            score -= 5  # penalize huge outliers
 
-        # ✅ Pick the best-scored candidate
-        best = max(scored, key=lambda x: (x[0], x[1]))
-        return best[1]
+        scored.append((score, amount))
 
-    return picked
+    # 5️⃣ Pick best candidate
+    best = max(scored, key=lambda x: (x[0], x[1]))
+    return best[1]
 
 def extract_date_from_text(lines):
     date_patterns = [
@@ -332,7 +332,3 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-
-
