@@ -89,6 +89,7 @@ def extract_total_amount(lines: List[str]) -> float:
     normalized = [ln for ln in lines]
     n_lines = len(normalized)
 
+    # ✅ safer pattern: avoids merging numbers across spaces
     amount_pattern = re.compile(r"\b\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?\b")
 
     def amounts_in_line(line: str):
@@ -96,11 +97,11 @@ def extract_total_amount(lines: List[str]) -> float:
         parsed = [_parse_amount_str(f) for f in found]
         return [p for p in parsed if p is not None]
 
-    # 1️⃣ Prioritized keyword scan
+    # 1️⃣ Try prioritized keywords first (with neighbors)
     for kw in prioritized_keywords:
         for idx, line in enumerate(normalized):
             low = line.lower()
-            if kw in low and not any(x in low for x in ["sub", "qty", "quantity"]):  # ⛔ skip qty/sub
+            if kw in low and "sub" not in low:
                 cands = amounts_in_line(line)
                 if cands:
                     return max(cands)
@@ -113,72 +114,53 @@ def extract_total_amount(lines: List[str]) -> float:
                     if cands:
                         return max(cands)
 
-    # 2️⃣ Collect candidates, but exclude known non-totals
-    exclude_tokens = [
-        "sub total", "subtotal", "cgst", "sgst", "igst",
-        "vat", "tax", "taxes", "discount", "change",
-        "qty", "quantity", "total qty"
-    ]
+    # 2️⃣ Collect candidates (excluding known non-totals)
+    exclude_tokens = ["sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes", "discount", "change"]
     candidates = []
-    subtotal = None
-    tax_total = 0.0
-
     for idx, line in enumerate(normalized):
         low = line.lower()
-        cands = amounts_in_line(line)
-
-        # detect subtotal separately
-        if "sub total" in low or "subtotal" in low:
-            if cands:
-                subtotal = max(cands)
-
-        # detect tax amounts separately
-        if any(tok in low for tok in ["cgst", "sgst", "igst", "vat", "tax"]):
-            if cands:
-                tax_total += sum(cands)
-            continue
-
         if any(tok in low for tok in exclude_tokens):
             continue
-
+        cands = amounts_in_line(line)
         for c in cands:
             candidates.append((c, line, idx))
-
-    # 3️⃣ If no candidates but we have subtotal + taxes → compute fallback total
-    if not candidates and subtotal:
-        return subtotal + tax_total
 
     if not candidates:
         return 0.0
 
-    # 4️⃣ Scoring candidates
+    # 3️⃣ Compute itemized average (for sanity check)
+    item_values = [c for c, _, _ in candidates if c < 50000]
+    avg_item = sum(item_values) / len(item_values) if item_values else 0
+
+    # 4️⃣ Scoring system for fallback
     scored = []
     for amount, line, idx in candidates:
         score = 0
         low = line.lower()
 
-        if any(k in low for k in ["grand", "total", "amount", "due", "payable", "bill", "net"]):
+        # keyword context
+        if any(k in low for k in ["total", "amount", "due", "payable", "bill", "net"]):
             score += 5
-        if "grand" in low or "payable" in low:
-            score += 3
-
-        if idx < n_lines * 0.2 or idx > n_lines * 0.8:  # top/bottom of bill
+        if "net" in low or "payable" in low:
             score += 2
 
+        # position (top/bottom often carries totals)
+        if idx < n_lines * 0.2 or idx > n_lines * 0.8:
+            score += 2
+
+        # realistic range
         if 5 <= amount <= 100000:
             score += 1
 
+        # sanity check against average
+        if avg_item > 0 and amount > avg_item * 20:
+            score -= 5
+
         scored.append((score, amount))
 
-    # 5️⃣ Pick best candidate, but sanity-check against largest number
-    best_score, best_amount = max(scored, key=lambda x: (x[0], x[1]))
-    max_amount = max(a for _, a in scored)
-
-    # If largest amount is much bigger → trust it
-    if max_amount > best_amount and max_amount >= 2 * best_amount:
-        return max_amount
-
-    return best_amount
+    # 5️⃣ Pick best candidate
+    best = max(scored, key=lambda x: (x[0], x[1]))
+    return best[1]
 
 def extract_date_from_text(lines):
     date_patterns = [
@@ -352,4 +334,5 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
