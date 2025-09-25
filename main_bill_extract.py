@@ -69,27 +69,6 @@ def _parse_amount_str(s: str):
         return None
 
 def extract_total_amount(lines: List[str]) -> float:
-    # 🔹 detect if receipt looks like fuel
-    fuel_indicators = ["petrol", "diesel", "fuel", "nozzle", "volume", "litre", "ltr"]
-    is_fuel = any(any(ind in line.lower() for ind in fuel_indicators) for line in lines)
-
-    amount_pattern = re.compile(r"[\d,]+(?:\.\d{1,2})?")
-    qty_re = re.compile(r'\b(item|items|qty|no\.?|pcs|piece|item\(s\))\b', re.I)
-
-    def amounts_in_line(line: str):
-        found = amount_pattern.findall(line.replace(" ", ""))
-        parsed = [_parse_amount_str(f) for f in found]
-        return [p for p in parsed if p is not None]
-
-    # ✅ Fuel receipts → pick from "AMOUNT"/"TOTAL AMOUNT" line only
-    if is_fuel:
-        for line in lines:
-            if re.search(r"(?:total\s+amount|amount)", line, flags=re.I):
-                cands = amounts_in_line(line)
-                if cands:
-                    return max(cands)
-
-    # 🔹 Your existing prioritized logic continues below
     prioritized_keywords = [
         "grand total",
         "amount payable",
@@ -109,11 +88,21 @@ def extract_total_amount(lines: List[str]) -> float:
 
     normalized = [ln for ln in lines]
     n_lines = len(normalized)
+    amount_pattern = re.compile(r"[\d,]+(?:\.\d{1,2})?")
+
+    def amounts_in_line(line: str):
+        found = amount_pattern.findall(line.replace(" ", ""))
+        parsed = [_parse_amount_str(f) for f in found]
+        return [p for p in parsed if p is not None]
+
+    # ✅ improved prioritized-keyword neighbor search
+    qty_re = re.compile(r'\b(item|items|qty|no\.?|pcs|piece|item\(s\))\b', re.I)
 
     for kw in prioritized_keywords:
         for idx, line in enumerate(normalized):
             low = line.lower()
             if kw in low and "sub" not in low:
+                # collect amounts from same, previous, next lines
                 neighbor_idxs = [idx, idx - 1, idx + 1]
                 neighbor_cands = []
                 for j in neighbor_idxs:
@@ -125,6 +114,7 @@ def extract_total_amount(lines: List[str]) -> float:
                 if not neighbor_cands:
                     continue
 
+                # drop obvious qty/item lines where the number is an integer
                 filtered = []
                 for a, j, l in neighbor_cands:
                     if qty_re.search(l) and float(a).is_integer():
@@ -136,17 +126,18 @@ def extract_total_amount(lines: List[str]) -> float:
                         a, j, l = t
                         score = 0
                         if '.' in str(a):
-                            score += 2
+                            score += 2   # decimals look more like totals
                         if j > n_lines * 0.6:
-                            score += 1
-                        score += (a / (1 + a))
+                            score += 1   # prefer amounts near bottom
+                        score += (a / (1 + a))  # tie-breaker for larger values
                         return (score, a)
                     best = max(filtered, key=_score)
                     return best[0]
 
+                # fallback: nothing survived filter → return max neighbor amount
                 return max(a for a, _, _ in neighbor_cands)
 
-    # Collect candidates (excluding non-totals)
+    # 2️⃣ Collect candidates (excluding known non-totals)
     exclude_tokens = ["sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes", "discount", "change"]
     candidates = []
     for idx, line in enumerate(normalized):
@@ -160,8 +151,10 @@ def extract_total_amount(lines: List[str]) -> float:
     if not candidates:
         return 0.0
 
+    # 3️⃣ Pick max normally
     picked = max([c for c, _, _ in candidates])
 
+    # 4️⃣ Intelligent fallback check
     if picked < 10 or picked < (max([c for c, _, _ in candidates]) * 0.2):
         scored = []
         for amount, line, idx in candidates:
@@ -181,6 +174,7 @@ def extract_total_amount(lines: List[str]) -> float:
         return best[1]
 
     return picked
+
 
 def extract_date_from_text(lines):
     date_patterns = [
@@ -236,10 +230,11 @@ def get_safe_date(date_str: str):
     except:
         return datetime.today().strftime("%Y-%m-%d")
 
+# ---------------- detect_purpose (reprioritized) ----------------
 def detect_purpose(text, expense_date=None):
     text_upper = text.upper()
 
-    # Store-based detection
+    # Store-based detection (priority: Supplies & Shopping)
     store_keywords = {
         "Supplies": ["DMART", "BIG BAZAAR", "RELIANCE", "METRO", "SHOPPER STOP", "LIFESTYLE", "RELIANCE TRENDS"],
         "Shopping": ["AMAZON", "FLIPKART", "MYNTRA", "AJIO"]
@@ -248,6 +243,7 @@ def detect_purpose(text, expense_date=None):
         if any(k in text_upper for k in keywords):
             return category
 
+    # Travel-related
     if any(k in text_upper for k in ["AIRLINES", "FLIGHT", "AIR TICKET", "BOARDING PASS", "INDIGO", "SPICEJET", "VISTARA", "GOFIRST", "AKASA", "EMIRATES", "QATAR AIRWAYS", "JET", "AIRPORT"]):
         return "Air"
     if any(k in text_upper for k in ["CAB", "TAXI", "AUTO", "RIDE", "OLA", "UBER", "RAPIDO", "MERU", "CNG RICKSHAW"]):
@@ -259,17 +255,21 @@ def detect_purpose(text, expense_date=None):
     if any(k in text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION", "HP", "INDIANOIL", "BPCL", "SHELL", "REFUEL"]):
         return "Fuel"
 
+    # Accommodation
     if any(k in text_upper for k in ["ROOM NO", "RESORT", "LODGE", "INN", "INN TIME","OUT TIME","MOTEL", "SUITE", "ROOM CHARGE", "STAY", "ACCOMMODATION", "GUEST HOUSE", "BOOKING.COM", "EXPEDIA", "MAKEMYTRIP"]):
         return "Hotel"
 
+    # Entertainment
     if any(k in text_upper for k in ["MOVIE", "CINEMA", "THEATRE", "PVR", "INOX", "BOOKMYSHOW", "NETFLIX", "PRIME", "HOTSTAR", "SPOTIFY", "CONCERT", "EVENT", "SHOW", "GAMING", "SHOPPING", "MALL", "FASHION", "CLOTHES", "GARMENTS", "FOOTWEAR"]):
         return "Entertainment"
 
+    # Office & Medical
     if any(k in text_upper for k in ["STATIONERY", "OFFICE SUPPLY", "PENS", "PRINTER", "CARTRIDGE", "INK", "TONER", "PAPER", "DIARY", "REGISTER", "FILE", "MARKER", "WHITEBOARD", "LAPTOP", "DESKTOP", "MONITOR", "KEYBOARD", "MOUSE", "SCANNER", "HEADPHONES", "EARPHONES", "SPEAKER", "CHARGER", "BATTERY", "ROUTER", "USB", "SSD", "HDD", "MOBILE", "TABLET", "CABLES", "PROJECTOR", "CAMERA", "ELECTRONIC BILL", "ELECTRONIC INVOICE"]):
         return "Supplies"
     if any(k in text_upper for k in ["HOSPITAL", "PHARMACY", "DOCTOR", "CLINIC", "SURGERY", "MEDICINE", "TABLET", "INJECTION", "LAB", "DIAGNOSTIC", "PATHOLOGY", "XRAY", "SCAN", "MRI", "CHEMIST"]):
         return "Miscellaneous"
 
+    # Meals (lowest priority)
     meal_keywords = {
         "Lunch": ["MORNING MEAL", "TEA", "COFFEE", "SNACKS", "CAFE", "IDLI", "DOSA", "POHA", "BREAD",
                   "MILK", "JUICE", "PANCAKE", "OMELETTE", "BREAKFAST", "BREAKFAST COMBO",
@@ -348,6 +348,3 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-
