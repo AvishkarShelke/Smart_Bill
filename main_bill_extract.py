@@ -68,7 +68,7 @@ def _parse_amount_str(s: str):
     except:
         return None
 
-def extract_total_amount(lines: List[str]) -> float:
+def extract_total_amount(lines: List[str], full_text_upper="") -> float:
     prioritized_keywords = [
         "grand total",
         "amount payable",
@@ -95,18 +95,19 @@ def extract_total_amount(lines: List[str]) -> float:
         parsed = [_parse_amount_str(f) for f in found]
         return [p for p in parsed if p is not None]
 
-    # ✅ improved prioritized-keyword neighbor search
     qty_re = re.compile(r'\b(item|items|qty|no\.?|pcs|piece|item\(s\))\b', re.I)
+    invoice_keywords = ["invoice", "inv no", "bill no", "receipt no", "voucher"]
 
     for kw in prioritized_keywords:
         for idx, line in enumerate(normalized):
             low = line.lower()
             if kw in low and "sub" not in low:
-                # collect amounts from same, previous, next lines
                 neighbor_idxs = [idx, idx - 1, idx + 1]
                 neighbor_cands = []
                 for j in neighbor_idxs:
                     if 0 <= j < n_lines:
+                        if any(tok in normalized[j].lower() for tok in invoice_keywords):
+                            continue  # skip invoice number lines
                         cands = amounts_in_line(normalized[j])
                         for a in cands:
                             neighbor_cands.append((a, j, normalized[j]))
@@ -114,7 +115,6 @@ def extract_total_amount(lines: List[str]) -> float:
                 if not neighbor_cands:
                     continue
 
-                # drop obvious qty/item lines where the number is an integer
                 filtered = []
                 for a, j, l in neighbor_cands:
                     if qty_re.search(l) and float(a).is_integer():
@@ -126,24 +126,25 @@ def extract_total_amount(lines: List[str]) -> float:
                         a, j, l = t
                         score = 0
                         if '.' in str(a):
-                            score += 2   # decimals look more like totals
+                            score += 2
                         if j > n_lines * 0.6:
-                            score += 1   # prefer amounts near bottom
-                        score += (a / (1 + a))  # tie-breaker for larger values
+                            score += 1
+                        score += (a / (1 + a))
                         return (score, a)
                     best = max(filtered, key=_score)
                     return best[0]
 
-                # fallback: nothing survived filter → return max neighbor amount
                 return max(a for a, _, _ in neighbor_cands)
 
-    # 2️⃣ Collect candidates (excluding known non-totals)
+    # Collect candidates excluding known non-totals
     exclude_tokens = ["sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes", "discount", "change"]
     candidates = []
     for idx, line in enumerate(normalized):
         low = line.lower()
         if any(tok in low for tok in exclude_tokens):
             continue
+        if any(tok in low for tok in invoice_keywords):
+            continue  # skip invoice numbers
         cands = amounts_in_line(line)
         for c in cands:
             candidates.append((c, line, idx))
@@ -151,10 +152,15 @@ def extract_total_amount(lines: List[str]) -> float:
     if not candidates:
         return 0.0
 
-    # 3️⃣ Pick max normally
+    # Fuel-specific optimistic logic
+    is_fuel = any(k in full_text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION", "REFUEL"])
+    if is_fuel:
+        fuel_candidates = [amt for amt, line, idx in candidates if amt > 50]  # realistic fuel amount
+        if fuel_candidates:
+            return fuel_candidates[-1]  # pick last valid fuel amount
+
     picked = max([c for c, _, _ in candidates])
 
-    # 4️⃣ Intelligent fallback check
     if picked < 10 or picked < (max([c for c, _, _ in candidates]) * 0.2):
         scored = []
         for amount, line, idx in candidates:
@@ -175,10 +181,9 @@ def extract_total_amount(lines: List[str]) -> float:
 
     return picked
 
-
 def extract_date_from_text(lines):
     date_patterns = [
-        r"\b(\d{1,2}[-/\.\s][A-Za-z]{3}[-/\.\s]\d{2,4})\b", 
+        r"\b(\d{1,2}[-/\.\s][A-Za-z]{3}[-/\.\s]\d{2,4})\b",
         r"\b(\d{1,2}[-/\.\s]\d{1,2}[-/\.\s]\d{2,4})\b",
         r"\b(\d{4}[-/\.\s]\d{1,2}[-/\.\s]\d{1,2})\b",
         r"\b(\d{1,2} [A-Za-z]{3,9} \d{2,4})\b",
@@ -230,11 +235,9 @@ def get_safe_date(date_str: str):
     except:
         return datetime.today().strftime("%Y-%m-%d")
 
-# ---------------- detect_purpose (reprioritized) ----------------
 def detect_purpose(text, expense_date=None):
     text_upper = text.upper()
 
-    # Store-based detection (priority: Supplies & Shopping)
     store_keywords = {
         "Supplies": ["DMART", "BIG BAZAAR", "RELIANCE", "METRO", "SHOPPER STOP", "LIFESTYLE", "RELIANCE TRENDS"],
         "Shopping": ["AMAZON", "FLIPKART", "MYNTRA", "AJIO"]
@@ -243,7 +246,6 @@ def detect_purpose(text, expense_date=None):
         if any(k in text_upper for k in keywords):
             return category
 
-    # Travel-related
     if any(k in text_upper for k in ["AIRLINES", "FLIGHT", "AIR TICKET", "BOARDING PASS", "INDIGO", "SPICEJET", "VISTARA", "GOFIRST", "AKASA", "EMIRATES", "QATAR AIRWAYS", "JET", "AIRPORT"]):
         return "Air"
     if any(k in text_upper for k in ["CAB", "TAXI", "AUTO", "RIDE", "OLA", "UBER", "RAPIDO", "MERU", "CNG RICKSHAW"]):
@@ -255,21 +257,17 @@ def detect_purpose(text, expense_date=None):
     if any(k in text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION", "HP", "INDIANOIL", "BPCL", "SHELL", "REFUEL"]):
         return "Fuel"
 
-    # Accommodation
     if any(k in text_upper for k in ["ROOM NO", "RESORT", "LODGE", "INN", "INN TIME","OUT TIME","MOTEL", "SUITE", "ROOM CHARGE", "STAY", "ACCOMMODATION", "GUEST HOUSE", "BOOKING.COM", "EXPEDIA", "MAKEMYTRIP"]):
         return "Hotel"
 
-    # Entertainment
     if any(k in text_upper for k in ["MOVIE", "CINEMA", "THEATRE", "PVR", "INOX", "BOOKMYSHOW", "NETFLIX", "PRIME", "HOTSTAR", "SPOTIFY", "CONCERT", "EVENT", "SHOW", "GAMING", "SHOPPING", "MALL", "FASHION", "CLOTHES", "GARMENTS", "FOOTWEAR"]):
         return "Entertainment"
 
-    # Office & Medical
     if any(k in text_upper for k in ["STATIONERY", "OFFICE SUPPLY", "PENS", "PRINTER", "CARTRIDGE", "INK", "TONER", "PAPER", "DIARY", "REGISTER", "FILE", "MARKER", "WHITEBOARD", "LAPTOP", "DESKTOP", "MONITOR", "KEYBOARD", "MOUSE", "SCANNER", "HEADPHONES", "EARPHONES", "SPEAKER", "CHARGER", "BATTERY", "ROUTER", "USB", "SSD", "HDD", "MOBILE", "TABLET", "CABLES", "PROJECTOR", "CAMERA", "ELECTRONIC BILL", "ELECTRONIC INVOICE"]):
         return "Supplies"
     if any(k in text_upper for k in ["HOSPITAL", "PHARMACY", "DOCTOR", "CLINIC", "SURGERY", "MEDICINE", "TABLET", "INJECTION", "LAB", "DIAGNOSTIC", "PATHOLOGY", "XRAY", "SCAN", "MRI", "CHEMIST"]):
         return "Miscellaneous"
 
-    # Meals (lowest priority)
     meal_keywords = {
         "Lunch": ["MORNING MEAL", "TEA", "COFFEE", "SNACKS", "CAFE", "IDLI", "DOSA", "POHA", "BREAD",
                   "MILK", "JUICE", "PANCAKE", "OMELETTE", "BREAKFAST", "BREAKFAST COMBO",
@@ -322,18 +320,18 @@ async def extract_expense_info(payload: OCRRequest):
                 return JSONResponse(content={"error": "No OCR words or tokens found."}, status_code=400)
 
         lines = group_words_into_lines(words)
-        full_text = " ".join([w.get("text", "").upper() for w in words])
+        full_text_upper = " ".join([w.get("text", "").upper() for w in words])
 
-        total = extract_total_amount(lines)
+        total = extract_total_amount(lines, full_text_upper)
 
         raw_expense_date = extract_date_from_text(lines)
         expense_date = get_safe_date(raw_expense_date)
 
-        if any(cur in full_text for cur in ["INR", "₹", "RS"]):
+        if any(cur in full_text_upper for cur in ["INR", "₹", "RS"]):
             currency = "INR"
-        elif any(cur in full_text for cur in ["USD", "$"]):
+        elif any(cur in full_text_upper for cur in ["USD", "$"]):
             currency = "USD"
-        elif any(cur in full_text for cur in ["EUR", "€"]):
+        elif any(cur in full_text_upper for cur in ["EUR", "€"]):
             currency = "EUR"
         else:
             currency = "INR"
@@ -341,7 +339,7 @@ async def extract_expense_info(payload: OCRRequest):
         return {
             "ReimbursementCurrencyCode": currency,
             "ExpenseReportTotal": f"{total:.2f}",
-            "Purpose": detect_purpose(full_text, expense_date),
+            "Purpose": detect_purpose(full_text_upper, expense_date),
             "ExpenseDate": expense_date,
             "SubmitReport": "Y"
         }
