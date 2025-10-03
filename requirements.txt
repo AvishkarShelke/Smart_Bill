@@ -1,3 +1,7 @@
 fastapi
 uvicorn
 pydantic
+langdetect
+googletrans==4.0.0-rc1
+money-parser
+
