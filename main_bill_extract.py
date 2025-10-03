@@ -5,6 +5,9 @@ from pydantic import BaseModel
 from typing import Dict, List, Any
 import re
 from datetime import datetime
+from langdetect import detect
+from googletrans import Translator
+from money_parser import price_str  # <-- new library import
 
 app = FastAPI()
 
@@ -16,6 +19,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+translator = Translator()
+
 @app.options("/extract-expense-info")
 async def preflight():
     return JSONResponse(status_code=200)
@@ -23,6 +28,22 @@ async def preflight():
 class OCRRequest(BaseModel):
     pages: List[Dict[str, Any]]
 
+# -------------------------
+# LANGUAGE DETECTION + TRANSLATION
+# -------------------------
+def detect_and_translate(text: str) -> str:
+    try:
+        lang = detect(text)
+        if lang != "en":
+            translated = translator.translate(text, src=lang, dest="en")
+            return translated.text
+        return text
+    except:
+        return text
+
+# -------------------------
+# HELPER FUNCTIONS
+# -------------------------
 def group_words_into_lines(words):
     lines = []
     current_line = []
@@ -107,7 +128,7 @@ def extract_total_amount(lines: List[str], full_text_upper="") -> float:
                 for j in neighbor_idxs:
                     if 0 <= j < n_lines:
                         if any(tok in normalized[j].lower() for tok in invoice_keywords):
-                            continue  # skip invoice number lines
+                            continue
                         cands = amounts_in_line(normalized[j])
                         for a in cands:
                             neighbor_cands.append((a, j, normalized[j]))
@@ -136,7 +157,6 @@ def extract_total_amount(lines: List[str], full_text_upper="") -> float:
 
                 return max(a for a, _, _ in neighbor_cands)
 
-    # Collect candidates excluding known non-totals
     exclude_tokens = ["sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes", "discount", "change"]
     candidates = []
     for idx, line in enumerate(normalized):
@@ -144,7 +164,7 @@ def extract_total_amount(lines: List[str], full_text_upper="") -> float:
         if any(tok in low for tok in exclude_tokens):
             continue
         if any(tok in low for tok in invoice_keywords):
-            continue  # skip invoice numbers
+            continue
         cands = amounts_in_line(line)
         for c in cands:
             candidates.append((c, line, idx))
@@ -152,12 +172,11 @@ def extract_total_amount(lines: List[str], full_text_upper="") -> float:
     if not candidates:
         return 0.0
 
-    # Fuel-specific optimistic logic
     is_fuel = any(k in full_text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION", "REFUEL"])
     if is_fuel:
-        fuel_candidates = [amt for amt, line, idx in candidates if amt > 50]  # realistic fuel amount
+        fuel_candidates = [amt for amt, line, idx in candidates if amt > 50]
         if fuel_candidates:
-            return fuel_candidates[-1]  # pick last valid fuel amount
+            return fuel_candidates[-1]
 
     picked = max([c for c, _, _ in candidates])
 
@@ -256,13 +275,10 @@ def detect_purpose(text, expense_date=None):
         return "Parking"
     if any(k in text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION", "HP", "INDIANOIL", "BPCL", "SHELL", "REFUEL"]):
         return "Fuel"
-
     if any(k in text_upper for k in ["ROOM NO", "RESORT", "LODGE", "INN", "INN TIME","OUT TIME","MOTEL", "SUITE", "ROOM CHARGE", "STAY", "ACCOMMODATION", "GUEST HOUSE", "BOOKING.COM", "EXPEDIA", "MAKEMYTRIP"]):
         return "Hotel"
-
     if any(k in text_upper for k in ["MOVIE", "CINEMA", "THEATRE", "PVR", "INOX", "BOOKMYSHOW", "NETFLIX", "PRIME", "HOTSTAR", "SPOTIFY", "CONCERT", "EVENT", "SHOW", "GAMING", "SHOPPING", "MALL", "FASHION", "CLOTHES", "GARMENTS", "FOOTWEAR"]):
         return "Entertainment"
-
     if any(k in text_upper for k in ["STATIONERY", "OFFICE SUPPLY", "PENS", "PRINTER", "CARTRIDGE", "INK", "TONER", "PAPER", "DIARY", "REGISTER", "FILE", "MARKER", "WHITEBOARD", "LAPTOP", "DESKTOP", "MONITOR", "KEYBOARD", "MOUSE", "SCANNER", "HEADPHONES", "EARPHONES", "SPEAKER", "CHARGER", "BATTERY", "ROUTER", "USB", "SSD", "HDD", "MOBILE", "TABLET", "CABLES", "PROJECTOR", "CAMERA", "ELECTRONIC BILL", "ELECTRONIC INVOICE"]):
         return "Supplies"
     if any(k in text_upper for k in ["HOSPITAL", "PHARMACY", "DOCTOR", "CLINIC", "SURGERY", "MEDICINE", "TABLET", "INJECTION", "LAB", "DIAGNOSTIC", "PATHOLOGY", "XRAY", "SCAN", "MRI", "CHEMIST"]):
@@ -274,7 +290,7 @@ def detect_purpose(text, expense_date=None):
                   "THALI", "MEAL", "MIDDAY", "CAFETERIA", "BUFFET", "VEG", "NON-VEG", "LUNCH BOX",
                   "RESTAURANT BILL", "SUBWAY", "KFC", "PIZZA HUT", "DOMINOS"],
         "Dinner": ["SUPPER", "NIGHT MEAL", "DINNER BUFFET", "RESTAURANT", "EVENING MEAL", "DINNER COMBO",
-                   "FINE DINE", "FOOD COURT", "ZOMATO", "SWIGGY"]
+                   "FINE DINE", "FOOD COURT", "ZOMATO","SWIGGY", "SWIGGY"]
     }
 
     meal_by_time = None
@@ -306,13 +322,51 @@ def detect_purpose(text, expense_date=None):
 
     return "Miscellaneous"
 
+# -------------------------
+# MULTI-CURRENCY DETECTION FUNCTION (MERGED ROBUST VERSION)
+# -------------------------
+def detect_currency_library(text: str, total_amount: float = None):
+    symbol_to_code = {
+        "₹": "INR", "$": "USD", "€": "EUR", "£": "GBP",
+        "¥": "JPY", "₩": "KRW", "₽": "RUB", "₺": "TRY",
+        "₦": "NGN", "AED": "AED", "CAD": "CAD", "AUD": "AUD",
+        "CHF": "CHF", "SGD": "SGD"
+    }
+
+    try:
+        amounts = price_str.findall(text)
+        currencies_found = [amt[0] for amt in amounts if amt[0]]
+
+        if not currencies_found:
+            for symbol, code in symbol_to_code.items():
+                if symbol in text:
+                    return code
+            return "INR"
+
+        currencies_found = [symbol_to_code.get(c, c.upper()) for c in currencies_found]
+        currencies_found = list(set(currencies_found))
+
+        if total_amount and len(currencies_found) > 1:
+            for amt in amounts:
+                cur, val = amt
+                cur_code = symbol_to_code.get(cur, cur.upper())
+                if abs(float(val) - total_amount) < 0.01:
+                    return cur_code
+
+        return currencies_found[0].upper()
+
+    except:
+        return "INR"
+
+# -------------------------
+# MAIN API
+# -------------------------
 @app.post("/extract-expense-info")
 async def extract_expense_info(payload: OCRRequest):
     try:
         words = []
         for page in payload.pages:
             words.extend(page.get("words", []))
-
         if not words:
             for page in payload.pages:
                 words.extend(page.get("tokens", []))
@@ -320,29 +374,24 @@ async def extract_expense_info(payload: OCRRequest):
                 return JSONResponse(content={"error": "No OCR words or tokens found."}, status_code=400)
 
         lines = group_words_into_lines(words)
-        full_text_upper = " ".join([w.get("text", "").upper() for w in words])
+        full_text = " ".join([w.get("text", "") for w in words])
+        full_text_en = detect_and_translate(full_text)
+        full_text_upper = full_text_en.upper()
 
         total = extract_total_amount(lines, full_text_upper)
-
         raw_expense_date = extract_date_from_text(lines)
         expense_date = get_safe_date(raw_expense_date)
-
-        if any(cur in full_text_upper for cur in ["INR", "₹", "RS"]):
-            currency = "INR"
-        elif any(cur in full_text_upper for cur in ["USD", "$"]):
-            currency = "USD"
-        elif any(cur in full_text_upper for cur in ["EUR", "€"]):
-            currency = "EUR"
-        else:
-            currency = "INR"
+        currency = detect_currency_library(full_text_en, total)
+        purpose = detect_purpose(full_text_upper, expense_date)
 
         return {
             "ReimbursementCurrencyCode": currency,
             "ExpenseReportTotal": f"{total:.2f}",
-            "Purpose": detect_purpose(full_text_upper, expense_date),
+            "Purpose": purpose,
             "ExpenseDate": expense_date,
             "SubmitReport": "Y"
         }
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
