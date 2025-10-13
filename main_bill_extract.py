@@ -51,6 +51,7 @@ def _parse_amount_str(s: str):
     if not s:
         return None
     s_clean = s.strip()
+    # Handle comma decimal or thousands
     if re.search(r"\d+,\d{2}$", s_clean):
         s_clean = s_clean.replace(".", "").replace(",", ".")
     else:
@@ -70,17 +71,19 @@ def _parse_amount_str(s: str):
 
 def extract_total_amount(lines: List[str], full_text_upper="", category=None) -> float:
     prioritized_keywords = [
-        "grand total","amount payable","amount to be paid","net payable",
-        "total payable","total amount","balance due","total bill amount",
-        "bill amount","amount payable from customer","upi payment",
-        "net amt","net amount","total","total general","importe total",
-        "total a pagar","monto total","valor total","total líquido","total factura"
+        "grand total", "amount payable", "amount to be paid", "net payable",
+        "total payable", "total amount", "balance due", "total bill amount",
+        "bill amount", "amount payable from customer", "upi payment",
+        "net amt", "net amount", "total",
+        "total general", "importe total", "total a pagar", "monto total",
+        "valor total", "total líquido", "total factura"
     ]
+
     amount_pattern = re.compile(r"[\d,]+(?:\.\d{1,2})?")
     invoice_keywords = ["invoice", "inv no", "bill no", "receipt no", "voucher",
                         "factura", "recibo", "nota fiscal"]
-    exclude_tokens = ["sub total","subtotal","cgst","sgst","vat","tax","discount",
-                      "cambio","impuesto","descuento"]
+    exclude_tokens = ["sub total", "subtotal", "cgst", "sgst", "vat", "tax", "discount",
+                      "cambio", "impuesto", "descuento"]
     if category == "Fuel":
         exclude_tokens += invoice_keywords
 
@@ -108,7 +111,6 @@ def extract_total_amount(lines: List[str], full_text_upper="", category=None) ->
     if safe_candidates:
         return max(safe_candidates)
 
-    # fallback: last numeric > 10
     all_numbers = []
     for line in lines:
         low = line.lower()
@@ -129,9 +131,10 @@ def extract_date_from_text(lines):
         r"\b(\d{1,2} [A-Za-z]{3,9} \d{2,4})\b",
         r"\b([A-Za-z]{3,9} \d{1,2}, \d{4})\b"
     ]
+
     def parse_date_safe(date_str):
-        formats = ["%d/%m/%Y","%d-%m-%Y","%Y-%m-%d","%d %B %Y",
-                   "%B %d, %Y","%d/%m/%y","%d-%m-%y","%d-%b-%Y","%d-%b-%y"]
+        formats = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d %B %Y",
+                   "%B %d, %Y", "%d/%m/%y", "%d-%m-%y", "%d-%b-%Y", "%d-%b-%y"]
         for fmt in formats:
             try:
                 dt = datetime.strptime(date_str, fmt)
@@ -140,6 +143,7 @@ def extract_date_from_text(lines):
             except:
                 continue
         return None
+
     for line in lines:
         for pattern in date_patterns:
             matches = re.findall(pattern, line)
@@ -163,16 +167,16 @@ def detect_purpose(text, expense_date=None):
     text_upper = text.upper()
     purpose_map = {
         "Miscellaneous": ["HOSPITAL","CLINIC","PHARMACY","MEDICINE","TABLET","INJECTION","LAB","DIAGNOSTIC","PATHOLOGY","XRAY","SCAN","MRI","CHEMIST","DOCTOR","SURGERY",
-                          "HOSPITAL","CLÍNICA","FARMACIA","MEDICINA","TABLETA","INYECCIÓN","LABORATORIO","DIAGNÓSTICO","PATOLOGÍA","RX","ESCANEO","MÉDICO","DOCTOR","CIRUGÍA","QUIRÓFANO",
-                          "HOSPITAL","CLÍNICA","FARMÁCIA","MEDICAMENTO","COMPRIMIDO","INJEÇÃO","LABORATÓRIO","DIAGNÓSTICO","PATOLOGIA","RAIO-X","EXAME","MÉDICO","DOUTOR","CIRURGIA","ENFERMARIA"],
-        "Air":["AIRLINES","FLIGHT","TICKET","BOARDING","AEROLÍNEA","VUELO","BILLETE","PASSAGEM AÉREA","AVIÓN","AIR","VOO","PASSAGEM"],
-        "Taxi":["CAB","TAXI","AUTO","RIDE","UBER","OLA","RAPIDO","BOLT","TAXI","COLECTIVO","REMIS","CORRIDA"],
-        "Car Rental":["RENTAL","ZOOMCAR","HERTZ","ALQUILER","ALUGUEL","COCHE","CARRO","CAR RENTAL","SELF DRIVE"],
-        "Parking":["PARKING","TOLL","GARAGE","ESTACIONAMIENTO","PARQUEO","PARQUEAMENTO"],
-        "Fuel":["FUEL","PETROL","DIESEL","GAS STATION","GASOLINA","COMBUSTÍVEL","POSTO","HP","BPCL","SHELL","INDIANOIL"],
-        "Hotel":["ROOM","LODGE","HOTEL","RESORT","HOSPEDAJE","ALOJAMIENTO","POUSADA","SUITE","BOOKING","EXPEDIA","MAKEMYTRIP"],
-        "Entertainment":["MOVIE","CINEMA","THEATRE","CONCERT","ESPECTÁCULO","ENTRETENIMIENTO","DIVERSÃO","SHOW","EVENTO","GAMING","MÚSICA","NETFLIX","PRIME","HOTSTAR","PVR","INOX","BOOKMYSHOW"],
-        "Supplies":["STATIONERY","OFFICE","PAPER","SUPPLY","SUMINISTROS","PAPELERÍA","ESCRITORIO","INK","TONER","CARTRIDGE","DIARY","REGISTER","FILE","MARKER"]
+                          "CLÍNICA","FARMACIA","MEDICINA","TABLETA","INYECCIÓN","LABORATORIO","DIAGNÓSTICO","PATOLOGÍA","RX","ESCANEO","MÉDICO","DOCTOR","CIRUGÍA","QUIRÓFANO",
+                          "FARMÁCIA","MEDICAMENTO","COMPRIMIDO","INJEÇÃO","LABORATÓRIO","DIAGNÓSTICO","PATOLOGIA","RAIO-X","EXAME","DOUTOR","CIRURGIA","ENFERMARIA"],
+        "Air": ["AIRLINES","FLIGHT","TICKET","BOARDING","AEROLÍNEA","VUELO","BILLETE","PASSAGEM AÉREA","AVIÓN","AIR","VOO","PASSAGEM"],
+        "Taxi": ["CAB","TAXI","AUTO","RIDE","UBER","OLA","RAPIDO","BOLT","COLECTIVO","REMIS","CORRIDA"],
+        "Car Rental": ["RENTAL","ZOOMCAR","HERTZ","ALQUILER","ALUGUEL","COCHE","CARRO","CAR RENTAL","SELF DRIVE"],
+        "Parking": ["PARKING","TOLL","GARAGE","ESTACIONAMIENTO","PARQUEO","PARQUEAMENTO"],
+        "Fuel": ["FUEL","PETROL","DIESEL","GAS STATION","GASOLINA","COMBUSTÍVEL","POSTO","HP","BPCL","SHELL","INDIANOIL"],
+        "Hotel": ["ROOM","LODGE","HOTEL","RESORT","HOSPEDAJE","ALOJAMIENTO","POUSADA","SUITE","BOOKING","EXPEDIA","MAKEMYTRIP"],
+        "Entertainment": ["MOVIE","CINEMA","THEATRE","CONCERT","ESPECTÁCULO","ENTRETENIMIENTO","DIVERSÃO","SHOW","EVENTO","GAMING","MÚSICA","NETFLIX","PRIME","HOTSTAR","PVR","INOX","BOOKMYSHOW"],
+        "Supplies": ["STATIONERY","OFFICE","PAPER","SUPPLY","SUMINISTROS","PAPELERÍA","ESCRITORIO","INK","TONER","CARTRIDGE","DIARY","REGISTER","FILE","MARKER"]
     }
 
     for category, keywords in purpose_map.items():
@@ -181,8 +185,13 @@ def detect_purpose(text, expense_date=None):
 
     # Meal detection
     meal_keywords = {
-        "Lunch":["BREAKFAST","MORNING MEAL","TEA","COFFEE","SNACKS","CAFE","IDLI","DOSA","POHA","BREAD","MILK","JUICE","PANCAKE","OMELETTE","THALI","MEAL","MIDDAY","CAFETERIA","BUFFET","VEG","NON-VEG","LUNCH BOX","RESTAURANT BILL","SUBWAY","KFC","PIZZA HUT","DOMINOS"],
-        "Dinner":["DINNER","SUPPER","EVENING MEAL","DINNER COMBO","FINE DINE","FOOD COURT","ZOMATO","SWIGGY","RESTAURANT","MEAL","BUFFET"]
+        "Lunch": ["BREAKFAST","MORNING MEAL","TEA","COFFEE","SNACKS","CAFE","IDLI","DOSA","POHA","BREAD","MILK","JUICE","PANCAKE","OMELETTE","THALI","MEAL",
+                  "MIDDAY","CAFETERIA","BUFFET","VEG","NON-VEG","LUNCH BOX","RESTAURANT BILL","SUBWAY","KFC","PIZZA HUT","DOMINOS",
+                  "DESAYUNO","ALMUERZO","CAFÉ","PANCAKE","SOPA","COMIDA","CAFETERÍA","RESTAURANTE","SNACK","SANDWICH","BEBIDA","LUNCHBOX","ENSALADA","HAMBURGUESA","PIZZA",
+                  "CAFÉ DA MANHÃ","ALMOÇO","LANCHES","SORVETE","PÃO","CAFETERIA","RESTAURANTE","SOPA","SANDUÍCHE","BEBIDA","SALADA","HAMBÚRGUER","PIZZA","SUCO","FRUTA"],
+        "Dinner": ["DINNER","SUPPER","EVENING MEAL","DINNER COMBO","FINE DINE","FOOD COURT","ZOMATO","SWIGGY","RESTAURANT","MEAL","BUFFET","SUBWAY","DOMINOS","KFC","PIZZA HUT",
+                   "CENA","COMIDA NOCTURNA","RESTAURANTE","BUFFET","FOOD COURT","ZOMATO","SWIGGY","DOMINOS","KFC","PIZZA HUT","SUPPER","MERIENDA","PLATO PRINCIPAL","FINE DINING","SNACKS",
+                   "JANTAR","RESTAURANTE","BUFFET","FOOD COURT","ZOMATO","SWIGGY","DOMINOS","KFC","PIZZA HUT","SUPPER","LANCHES","PRATO PRINCIPAL","FINE DINING","CEIA","SNACKS"]
     }
 
     meal_by_time = None
@@ -192,15 +201,13 @@ def detect_purpose(text, expense_date=None):
                 dt = datetime.strptime(expense_date, "%Y-%m-%d %H:%M:%S")
             except:
                 dt = datetime.strptime(expense_date, "%Y-%m-%d")
-            hour = dt.hour
-            meal_by_time = "Lunch" if hour < 17 else "Dinner"
+            meal_by_time = "Lunch" if dt.hour < 17 else "Dinner"
         except:
             pass
 
     for meal, keywords in meal_keywords.items():
         if any(k in text_upper for k in keywords):
             return meal
-
     if meal_by_time:
         return meal_by_time
 
@@ -217,40 +224,41 @@ async def extract_expense_info(payload: OCRRequest):
             for page in payload.pages:
                 words.extend(page.get("tokens", []))
             if not words:
-                return JSONResponse(content={"error":"No OCR words or tokens found."}, status_code=400)
+                return JSONResponse(content={"error": "No OCR words or tokens found."}, status_code=400)
 
         lines = group_words_into_lines(words)
-        full_text = " ".join([w.get("text","") for w in words])
+        full_text = " ".join([w.get("text", "") for w in words])
         full_text_upper = full_text.upper()
 
-        # -------------------- LANGUAGE DETECTION --------------------
+        # Language detection
         try:
             language = detect(full_text)
         except:
             language = "en"
 
-        # Spanish/Portuguese signals
-        signals = ["IVA","EUROS","GRACIAS","FACTURA","TOTAL","IMPORTE","COBRO","R$"]
+        # Manual Spanish/Portuguese fallback
+        signals = ["IVA", "EUROS", "GRACIAS", "FACTURA", "TOTAL", "IMPORTE", "COBRO"]
         if any(sig in full_text_upper for sig in signals):
             language = "es"
 
-        # -------------------- PURPOSE & TOTAL --------------------
         category = detect_purpose(full_text)
         total = extract_total_amount(lines, full_text_upper, category)
         raw_date = extract_date_from_text(lines)
         expense_date = get_safe_date(raw_date)
 
-        # -------------------- CURRENCY DETECTION --------------------
-        text_no_space = full_text_upper.replace(" ","")
-        if any(sym in text_no_space for sym in ["₹","INR"," RS."," RS "]):
+        # Currency detection
+        text_no_space = full_text_upper.replace(" ", "")
+        if any(sym in text_no_space for sym in ["₹", "INR", " RS.", " RS "]):
             currency = "INR"
-        elif any(sym in text_no_space for sym in ["USD","US$","US DOLLAR"]) or ("$" in text_no_space and not "₹" in text_no_space and not "RS" in text_no_space):
+        elif any(sym in text_no_space for sym in ["USD", "US$", "US DOLLAR"]) or (
+            "$" in text_no_space and not "₹" in text_no_space and not "RS" in text_no_space
+        ):
             currency = "USD"
-        elif any(sym in text_no_space for sym in ["EUR","€","EURO"]):
+        elif any(sym in text_no_space for sym in ["EUR", "€", "EURO"]):
             currency = "EUR"
-        elif any(sym in text_no_space for sym in ["GBP","£","POUND"]):
+        elif any(sym in text_no_space for sym in ["GBP", "£", "POUND"]):
             currency = "GBP"
-        elif any(sym in text_no_space for sym in ["BRL","R$","REAL"]):
+        elif any(sym in text_no_space for sym in ["BRL", "R$", "REAL"]):
             currency = "BRL"
         else:
             if "GST" in full_text_upper or "INDIA" in full_text_upper:
@@ -274,7 +282,8 @@ async def extract_expense_info(payload: OCRRequest):
         }
 
     except Exception as e:
-        return JSONResponse(content={"error":"Failed to process OCR","details":str(e)}, status_code=500)
+        return JSONResponse(content={"error": "Failed to process OCR", "details": str(e)}, status_code=500)
+
 
 
 
