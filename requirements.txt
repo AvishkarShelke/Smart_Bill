@@ -4,4 +4,5 @@ pydantic
 langdetect
 googletrans==4.0.0-rc1
 money-parser
+python-3.12.18
 
