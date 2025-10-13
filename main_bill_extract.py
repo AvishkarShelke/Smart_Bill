@@ -5,12 +5,18 @@ from pydantic import BaseModel
 from typing import Dict, List, Any
 import re
 from datetime import datetime
+from langdetect import detect
+import httpx
 
+# -------------------- CONFIG --------------------
+SPANISH_API_URL = "https://spanish-bill-expense-handler-1.onrender.com/extract-expense-info"
+
+# -------------------- APP SETUP --------------------
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://gccffb251970d0d-acseatpdbus.adb.us-ashburn-1.oraclecloudapps.com"],
+    allow_origins=["https://gccffb251970d0d-acseatpdbus.adb.us-ashburn-1.oraclecloudapps.com"],  # you can restrict origins as needed
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -23,6 +29,7 @@ async def preflight():
 class OCRRequest(BaseModel):
     pages: List[Dict[str, Any]]
 
+# -------------------- HELPER FUNCTIONS --------------------
 def group_words_into_lines(words):
     lines = []
     current_line = []
@@ -71,18 +78,18 @@ def _parse_amount_str(s: str):
 def extract_total_amount(lines: List[str], full_text_upper="") -> float:
     prioritized_keywords = [
         "grand total",
-        "amount payable",
-        "amount to be paid",
-        "net payable",
+        "amount payable", 
+        "amount to be paid", 
+        "net payable", 
         "total payable",
-        "total amount",
-        "balance due",
-        "total bill amount",
+        "total amount", 
+        "balance due", 
+        "total bill amount", 
         "bill amount",
-        "amount payable from customer",
-        "upi payment",
-        "net amt",
-        "net amount",
+        "amount payable from customer", 
+        "upi payment", 
+        "net amt", 
+        "net amount", 
         "total",
     ]
 
@@ -107,20 +114,17 @@ def extract_total_amount(lines: List[str], full_text_upper="") -> float:
                 for j in neighbor_idxs:
                     if 0 <= j < n_lines:
                         if any(tok in normalized[j].lower() for tok in invoice_keywords):
-                            continue  # skip invoice number lines
+                            continue
                         cands = amounts_in_line(normalized[j])
                         for a in cands:
                             neighbor_cands.append((a, j, normalized[j]))
-
                 if not neighbor_cands:
                     continue
-
                 filtered = []
                 for a, j, l in neighbor_cands:
                     if qty_re.search(l) and float(a).is_integer():
                         continue
                     filtered.append((a, j, l))
-
                 if filtered:
                     def _score(t):
                         a, j, l = t
@@ -132,11 +136,10 @@ def extract_total_amount(lines: List[str], full_text_upper="") -> float:
                         score += (a / (1 + a))
                         return (score, a)
                     best = max(filtered, key=_score)
-                    return best[0]
-
+                    return best[1]
                 return max(a for a, _, _ in neighbor_cands)
 
-    # Collect candidates excluding known non-totals
+    # fallback
     exclude_tokens = ["sub total", "subtotal", "cgst", "sgst", "vat", "tax", "taxes", "discount", "change"]
     candidates = []
     for idx, line in enumerate(normalized):
@@ -144,7 +147,7 @@ def extract_total_amount(lines: List[str], full_text_upper="") -> float:
         if any(tok in low for tok in exclude_tokens):
             continue
         if any(tok in low for tok in invoice_keywords):
-            continue  # skip invoice numbers
+            continue
         cands = amounts_in_line(line)
         for c in cands:
             candidates.append((c, line, idx))
@@ -152,33 +155,14 @@ def extract_total_amount(lines: List[str], full_text_upper="") -> float:
     if not candidates:
         return 0.0
 
-    # Fuel-specific optimistic logic
+    # Fuel-specific logic
     is_fuel = any(k in full_text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION", "REFUEL"])
     if is_fuel:
-        fuel_candidates = [amt for amt, line, idx in candidates if amt > 50]  # realistic fuel amount
+        fuel_candidates = [amt for amt, line, idx in candidates if amt > 50]
         if fuel_candidates:
-            return fuel_candidates[-1]  # pick last valid fuel amount
+            return fuel_candidates[-1]
 
     picked = max([c for c, _, _ in candidates])
-
-    if picked < 10 or picked < (max([c for c, _, _ in candidates]) * 0.2):
-        scored = []
-        for amount, line, idx in candidates:
-            score = 0
-            low = line.lower()
-            if any(k in low for k in ["total", "amount", "due", "payable", "bill", "net"]):
-                score += 5
-            if "net" in low or "payable" in low:
-                score += 2
-            if idx < n_lines * 0.2 or idx > n_lines * 0.8:
-                score += 2
-            if 5 <= amount <= 100000:
-                score += 1
-            scored.append((score, amount))
-
-        best = max(scored, key=lambda x: (x[0], x[1]))
-        return best[1]
-
     return picked
 
 def extract_date_from_text(lines):
@@ -189,13 +173,10 @@ def extract_date_from_text(lines):
         r"\b(\d{1,2} [A-Za-z]{3,9} \d{2,4})\b",
         r"\b([A-Za-z]{3,9} \d{1,2}, \d{4})\b"
     ]
-
     def parse_date_safe(date_str):
-        formats = [
-            "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d",
-            "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y",
-            "%d-%b-%Y", "%d-%b-%y"
-        ]
+        formats = ["%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y-%m-%d",
+                   "%d %B %Y", "%B %d, %Y", "%d/%m/%y", "%d-%m-%y",
+                   "%d-%b-%Y", "%d-%b-%y"]
         for fmt in formats:
             try:
                 dt = datetime.strptime(date_str, fmt)
@@ -206,7 +187,6 @@ def extract_date_from_text(lines):
             except:
                 continue
         return None
-
     valid_dates = []
     for line in lines:
         for pattern in date_patterns:
@@ -215,15 +195,11 @@ def extract_date_from_text(lines):
                 parsed = parse_date_safe(match)
                 if parsed:
                     valid_dates.append((parsed, line.lower()))
-
-    keywords = [
-        "invoice date", "bill date", "payment date", "txn date",
-        "transaction date", "paid on", "date of payment", "date"
-    ]
+    keywords = ["invoice date", "bill date", "payment date", "txn date",
+                "transaction date", "paid on", "date of payment", "date"]
     for date, context in valid_dates:
         if any(k in context for k in keywords):
             return date
-
     return valid_dates[0][0] if valid_dates else "Not Found"
 
 def get_safe_date(date_str: str):
@@ -235,6 +211,7 @@ def get_safe_date(date_str: str):
     except:
         return datetime.today().strftime("%Y-%m-%d")
 
+# -------------------- FULL PURPOSE DETECTION --------------------
 def detect_purpose(text, expense_date=None):
     text_upper = text.upper()
 
@@ -256,13 +233,10 @@ def detect_purpose(text, expense_date=None):
         return "Parking"
     if any(k in text_upper for k in ["FUEL", "PETROL", "DIESEL", "GAS STATION", "HP", "INDIANOIL", "BPCL", "SHELL", "REFUEL"]):
         return "Fuel"
-
     if any(k in text_upper for k in ["ROOM NO", "RESORT", "LODGE", "INN", "INN TIME","OUT TIME","MOTEL", "SUITE", "ROOM CHARGE", "STAY", "ACCOMMODATION", "GUEST HOUSE", "BOOKING.COM", "EXPEDIA", "MAKEMYTRIP"]):
         return "Hotel"
-
     if any(k in text_upper for k in ["MOVIE", "CINEMA", "THEATRE", "PVR", "INOX", "BOOKMYSHOW", "NETFLIX", "PRIME", "HOTSTAR", "SPOTIFY", "CONCERT", "EVENT", "SHOW", "GAMING", "SHOPPING", "MALL", "FASHION", "CLOTHES", "GARMENTS", "FOOTWEAR"]):
         return "Entertainment"
-
     if any(k in text_upper for k in ["STATIONERY", "OFFICE SUPPLY", "PENS", "PRINTER", "CARTRIDGE", "INK", "TONER", "PAPER", "DIARY", "REGISTER", "FILE", "MARKER", "WHITEBOARD", "LAPTOP", "DESKTOP", "MONITOR", "KEYBOARD", "MOUSE", "SCANNER", "HEADPHONES", "EARPHONES", "SPEAKER", "CHARGER", "BATTERY", "ROUTER", "USB", "SSD", "HDD", "MOBILE", "TABLET", "CABLES", "PROJECTOR", "CAMERA", "ELECTRONIC BILL", "ELECTRONIC INVOICE"]):
         return "Supplies"
     if any(k in text_upper for k in ["HOSPITAL", "PHARMACY", "DOCTOR", "CLINIC", "SURGERY", "MEDICINE", "TABLET", "INJECTION", "LAB", "DIAGNOSTIC", "PATHOLOGY", "XRAY", "SCAN", "MRI", "CHEMIST"]):
@@ -280,50 +254,51 @@ def detect_purpose(text, expense_date=None):
     meal_by_time = None
     if expense_date and expense_date != "Not Found":
         try:
-            try:
-                dt = datetime.strptime(expense_date, "%Y-%m-%d %H:%M:%S")
-            except:
-                dt = datetime.strptime(expense_date, "%Y-%m-%d")
+            dt = datetime.strptime(expense_date, "%Y-%m-%d")
             hour = dt.hour
-            if hour < 17:
-                meal_by_time = "Lunch"
-            else:
-                meal_by_time = "Dinner"
+            meal_by_time = "Lunch" if hour < 17 else "Dinner"
         except:
             pass
 
     for meal, keywords in meal_keywords.items():
         if any(k in text_upper for k in keywords):
             return meal
-
     if "RESTAURANT" in text_upper or "FOOD" in text_upper or "MEAL" in text_upper:
         if meal_by_time:
             return meal_by_time
         return "Lunch"
-
     if meal_by_time:
         return meal_by_time
 
     return "Miscellaneous"
 
+# -------------------- MAIN ORCHESTRATOR ENDPOINT --------------------
 @app.post("/extract-expense-info")
 async def extract_expense_info(payload: OCRRequest):
     try:
+        # Combine all words from pages
         words = []
         for page in payload.pages:
             words.extend(page.get("words", []))
-
         if not words:
             for page in payload.pages:
                 words.extend(page.get("tokens", []))
             if not words:
                 return JSONResponse(content={"error": "No OCR words or tokens found."}, status_code=400)
 
+        # Full text for language detection
+        full_text_upper = " ".join([w.get("text", "") for w in words])
+        language = detect(full_text_upper)
+
+        # If Spanish/Portuguese detected → call new API
+        if language in ["es", "pt"]:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(SPANISH_API_URL, json=payload.dict())
+                return JSONResponse(status_code=response.status_code, content=response.json())
+
+        # Else → use old Indian/US logic
         lines = group_words_into_lines(words)
-        full_text_upper = " ".join([w.get("text", "").upper() for w in words])
-
         total = extract_total_amount(lines, full_text_upper)
-
         raw_expense_date = extract_date_from_text(lines)
         expense_date = get_safe_date(raw_expense_date)
 
@@ -346,6 +321,7 @@ async def extract_expense_info(payload: OCRRequest):
 
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 
 
