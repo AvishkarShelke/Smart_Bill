@@ -1,8 +1,6 @@
-fastapi
-uvicorn
-pydantic
-langdetect
-googletrans==4.0.0-rc1
-money-parser
-
-
+fastapi==0.111.0
+uvicorn==0.30.1
+httpx==0.27.0
+pydantic==2.7.1
+langdetect==1.0.9
+python-multipart==0.0.9
